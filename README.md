@@ -229,22 +229,67 @@ docker compose up --build
 
 ### Rust Backend (`backend/`)
 
-- [ ] Initialise Rust crate (`Cargo.toml`) with dependencies: `axum`, `rumqttc`, `tokio`, `dashmap`, `serde`/`serde_json`, `chrono`, `tower-http`, `utoipa`/`utoipa-swagger-ui`, `tracing`/`tracing-subscriber`
-- [ ] `src/models.rs` — define `VehicleRecord` and `PositionEvent` with serde + utoipa derives
-- [ ] `src/store.rs` — `DashMap<String, VehicleRecord>` wrapper
-- [ ] `src/mqtt.rs`
-  - [ ] Connect to Mosquitto on startup
-  - [ ] Subscribe to `kuksa/+/telemetry/#`
-  - [ ] Parse topic: extract VIN (segment 1) and signal name (trailing path)
-  - [ ] Update `DashMap` on each message
-  - [ ] Broadcast `PositionEvent` on lat/lon updates
-- [ ] `src/api/fleet.rs`
-  - [ ] `GET /fleet` — return all vehicle records
-  - [ ] `GET /vehicles/{vin}` — return single vehicle record
-  - [ ] `GET /health` — liveness check
-- [ ] `src/api/ws.rs` — `WS /ws/fleet` — subscribe to broadcast, stream `PositionEvent` JSON
-- [ ] `src/main.rs` — wire axum router, CORS middleware, OpenAPI/Swagger at `/docs`, start MQTT loop
-- [ ] Write `Dockerfile`
+- [x] Initialise Rust crate (`Cargo.toml`) with dependencies: `axum`, `rumqttc`, `tokio`, `dashmap`, `serde`/`serde_json`, `chrono`, `tower-http`, `utoipa`/`utoipa-swagger-ui`, `tracing`/`tracing-subscriber`
+- [x] `src/models.rs` — define `VehicleRecord` and `PositionEvent` with serde + utoipa derives
+- [x] `src/store.rs` — `DashMap<String, VehicleRecord>` wrapper
+- [x] `src/mqtt.rs`
+  - [x] Connect to Mosquitto on startup
+  - [x] Subscribe to `kuksa/+/telemetry/#`
+  - [x] Parse topic: extract VIN (segment 1) and signal name (trailing path)
+  - [x] Update `DashMap` on each message
+  - [x] Broadcast `PositionEvent` on lat/lon updates
+- [x] `src/api/fleet.rs`
+  - [x] `GET /fleet` — return all vehicle records
+  - [x] `GET /vehicles/{vin}` — return single vehicle record
+  - [x] `GET /health` — liveness check
+- [x] `src/api/ws.rs` — `WS /ws/fleet` — subscribe to broadcast, stream `PositionEvent` JSON
+- [x] `src/main.rs` — wire axum router, CORS middleware, OpenAPI/Swagger at `/docs`, start MQTT loop
+- [x] Write `Dockerfile`
+
+#### Testing the backend
+
+Start the full stack (infrastructure + seed + sidecars + backend):
+
+```sh
+docker compose up --build backend
+```
+
+**Health check:**
+
+```sh
+curl http://localhost:3000/health
+# Expected: 200 OK
+```
+
+**Fleet endpoint — all 20 vehicles:**
+
+```sh
+curl -s http://localhost:3000/fleet | jq '.[0]'
+# Expected: first vehicle record with vin, brand, model, software_version, latitude, longitude, last_seen
+```
+
+**Single vehicle:**
+
+```sh
+curl -s http://localhost:3000/vehicles/VIN-0001 | jq
+# Expected: full VehicleRecord for VIN-0001
+# 404 if the VIN doesn't exist
+```
+
+**Swagger UI:**
+
+Open [http://localhost:3000/docs](http://localhost:3000/docs) in a browser — should render the interactive OpenAPI documentation.
+
+**WebSocket — live position stream:**
+
+```sh
+# Requires websocat: brew install websocat
+websocat ws://localhost:3000/ws/fleet
+# Expected: a stream of JSON position events at ~1 Hz per vehicle:
+# {"vin":"VIN-0003","lat":48.8641,"lon":2.3318}
+# {"vin":"VIN-0011","lat":48.8462,"lon":2.3204}
+# ...
+```
 
 ### Frontend (`frontend/`)
 
