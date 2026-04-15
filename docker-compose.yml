@@ -119,8 +119,6 @@ services:
   # Retries gRPC connections internally; exits 0 on success.
   seed:
     build: ./seed
-    environment:
-      DATABROKER_BASE_PORT: "55555"
     depends_on:
       - databroker-01
       - databroker-02

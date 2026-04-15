@@ -83,13 +83,70 @@ docker compose down
 
 ### Seed Script (`seed/`)
 
-- [ ] Create `seed/vehicles.json` — 20-vehicle dataset (VIN, brand, model, software version, initial lat/lon)
-- [ ] Write `seed/seed.py`
-  - [ ] Connect to each of the 20 Databrokers over gRPC (`kuksa-client`)
-  - [ ] Write 4 static VSS signals per vehicle: `Vehicle.VehicleIdentification.VIN`, `Brand`, `Model`, `Vehicle.SoftwareVersion`
-  - [ ] Write initial `Vehicle.CurrentLocation.Latitude` and `Longitude`
-  - [ ] Exit with code 0 on success
-- [ ] Write `seed/Dockerfile`
+- [x] Create `seed/vehicles.json` — 20-vehicle dataset (VIN, brand, model, software version, initial lat/lon)
+- [x] Write `seed/seed.py`
+  - [x] Connect to each of the 20 Databrokers over gRPC (`kuksa-client`)
+  - [x] Write 4 static VSS signals per vehicle: `Vehicle.VehicleIdentification.VIN`, `Brand`, `Model`, `Vehicle.SoftwareVersion`
+  - [x] Write initial `Vehicle.CurrentLocation.Latitude` and `Longitude`
+  - [x] Exit with code 0 on success
+- [x] Write `seed/Dockerfile`
+
+#### Testing the seed
+
+Start Mosquitto and the Databrokers, then run the seed container in isolation:
+
+```sh
+# 1. Bring up Mosquitto and all Databrokers
+docker compose up -d mosquitto databroker-01 databroker-02 databroker-03 databroker-04 \
+  databroker-05 databroker-06 databroker-07 databroker-08 databroker-09 databroker-10 \
+  databroker-11 databroker-12 databroker-13 databroker-14 databroker-15 databroker-16 \
+  databroker-17 databroker-18 databroker-19 databroker-20
+
+# 2. Build and run the seed (follows startup logs, exits when done)
+docker compose up --build seed
+```
+
+The seed should log `✓ seeded` for each vehicle and exit with code 0.
+
+**Verify seeded signals with `grpcurl`:**
+
+```sh
+# Install grpcurl (macOS)
+brew install grpcurl
+
+# List all services on a databroker
+grpcurl -plaintext localhost:55556 list
+
+# List all RPC methods on the VAL service
+grpcurl -plaintext localhost:55556 list kuksa.val.v1.VAL
+
+# Describe the Get request message (shows available fields)
+grpcurl -plaintext localhost:55556 describe kuksa.val.v1.GetRequest
+
+# Read the VIN from databroker-01
+grpcurl -plaintext \
+  -d '{"entries": [{"path": "Vehicle.VehicleIdentification.VIN", "fields": ["FIELD_VALUE"]}]}' \
+  localhost:55556 kuksa.val.v1.VAL/Get
+
+# Read all five seeded signals from databroker-01
+grpcurl -plaintext \
+  -d '{"entries": [
+    {"path": "Vehicle.VehicleIdentification.VIN",   "fields": ["FIELD_VALUE"]},
+    {"path": "Vehicle.VehicleIdentification.Brand",  "fields": ["FIELD_VALUE"]},
+    {"path": "Vehicle.VehicleIdentification.Model",  "fields": ["FIELD_VALUE"]},
+    {"path": "Vehicle.CurrentLocation.Latitude",     "fields": ["FIELD_VALUE"]},
+    {"path": "Vehicle.CurrentLocation.Longitude",    "fields": ["FIELD_VALUE"]}
+  ]}' \
+  localhost:55556 kuksa.val.v1.VAL/Get
+```
+
+Expected: responses containing `"string_value": "VIN-0001"` for the VIN, and numeric values for latitude/longitude.
+
+**Tear down:**
+
+```sh
+docker compose down
+```
 
 ### kuksa2mqtt Sidecar (`kuksa2mqtt/`)
 
