@@ -29,6 +29,36 @@ Eclipse Mosquitto (port 1883)
 
 ---
 
+## Docker Compose features
+
+### Healthchecks and startup ordering
+
+`mosquitto` exposes a healthcheck using `mosquitto_sub` to confirm the broker is accepting connections. Downstream services use `depends_on` with two different conditions to enforce the correct startup sequence:
+
+- `condition: service_healthy` — waits for the target service's healthcheck to pass (used by sidecars and backend waiting on Mosquitto).
+- `condition: service_completed_successfully` — waits for a one-shot container to exit with code 0 (used by sidecars waiting on the seed script).
+
+This guarantees the order: Mosquitto → Databrokers → Seed → Sidecars.
+
+### YAML anchors and extension fields
+
+The `x-sidecar-defaults` block at the top of the file uses Docker Compose's extension field convention (`x-` prefix). It defines shared configuration — `image`, `depends_on`, and `restart` — once, and each sidecar service merges it in with the YAML merge key `<<: *sidecar-defaults`. This avoids repeating the same 8 lines across all 20 services.
+
+### Single build, shared image
+
+All 20 `kuksa2mqtt` sidecar services are identical except for their environment variables. Only `kuksa2mqtt-01` has a `build:` directive; the other 19 reference the same `image: kuksa2mqtt:local` tag. Docker builds the image once and all containers reuse it — avoiding the race condition that occurs when 20 parallel builds try to tar the same build context simultaneously.
+
+To rebuild the sidecar image:
+```sh
+docker compose build kuksa2mqtt-01
+```
+
+### Mosquitto config volume
+
+The Mosquitto broker mounts its config file from `./mosquitto/mosquitto.conf` as a read-only bind mount. This allows the broker configuration (anonymous access, port) to be version-controlled alongside the rest of the project without building a custom image.
+
+---
+
 ## Todo
 
 ### Infrastructure
@@ -152,16 +182,50 @@ docker compose down
 
 ### kuksa2mqtt Sidecar (`kuksa2mqtt/`)
 
-- [ ] Initialise Rust crate (`Cargo.toml`)
-- [ ] Write `src/main.rs`
-  - [ ] Read config from env: `KUKSA_HOST`, `KUKSA_PORT`, `MQTT_HOST`, `VEHICLE_VIN`
-  - [ ] Connect to local Databroker via gRPC
-  - [ ] Connect to Mosquitto via MQTT (`rumqttc`)
-  - [ ] GPS random walk loop (1 Hz, σ ≈ 0.0002°)
-    - [ ] Generate new lat/lon delta
-    - [ ] Write updated values to Databroker
-    - [ ] Publish to `kuksa/{vin}/telemetry/CurrentLocation/Latitude` and `Longitude`
-- [ ] Write `Dockerfile`
+- [x] Initialise Rust crate (`Cargo.toml`)
+- [x] Write `src/main.rs`
+  - [x] Read config from env: `KUKSA_HOST`, `KUKSA_PORT`, `MQTT_HOST`, `VEHICLE_VIN`
+  - [x] Connect to local Databroker via gRPC
+  - [x] Connect to Mosquitto via MQTT (`rumqttc`)
+  - [x] GPS random walk loop (1 Hz, σ ≈ 0.0002°)
+    - [x] Generate new lat/lon delta
+    - [x] Write updated values to Databroker
+    - [x] Publish to `kuksa/{vin}/telemetry/CurrentLocation/Latitude` and `Longitude`
+- [x] Write `Dockerfile`
+
+#### Testing the sidecar
+
+Build and run the full stack up to and including the sidecars:
+
+```sh
+# Bring up infrastructure + seed + one sidecar to verify
+docker compose up --build mosquitto databroker-01 seed kuksa2mqtt-01
+```
+
+**Verify MQTT messages are flowing (requires `mqtt-cli`):**
+
+```sh
+brew install mqtt-cli
+
+# Subscribe to all telemetry for VIN-0001 — should see lat/lon messages every second
+mqtt sub -h localhost -p 1883 --topic='kuksa/VIN-0001/telemetry/#'
+```
+
+Expected output (updating at 1 Hz):
+```
+kuksa/VIN-0001/telemetry/VehicleIdentification/VIN   VIN-0001
+kuksa/VIN-0001/telemetry/VehicleIdentification/Brand Toyota
+kuksa/VIN-0001/telemetry/VehicleIdentification/Model Camry
+kuksa/VIN-0001/telemetry/CurrentLocation/Latitude    48.8571
+kuksa/VIN-0001/telemetry/CurrentLocation/Longitude   2.3529
+...
+```
+
+**Bring up all 20 sidecars:**
+
+```sh
+docker compose up --build
+```
 
 ### Rust Backend (`backend/`)
 

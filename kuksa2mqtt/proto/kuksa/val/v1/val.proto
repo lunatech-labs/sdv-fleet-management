@@ -1,0 +1,70 @@
+syntax = "proto3";
+
+package kuksa.val.v1;
+
+import "kuksa/val/v1/types.proto";
+
+service VAL {
+  rpc Get(GetRequest)                     returns (GetResponse);
+  rpc Set(SetRequest)                     returns (SetResponse);
+  rpc Subscribe(SubscribeRequest)         returns (stream SubscribeResponse);
+  rpc GetServerInfo(GetServerInfoRequest) returns (GetServerInfoResponse);
+}
+
+// ── Get ──────────────────────────────────────────────────────────────────────
+
+message GetRequest {
+  repeated EntryRequest entries = 1;
+}
+
+message EntryRequest {
+  string         path   = 1;
+  View           view   = 2;
+  repeated Field fields = 3;
+}
+
+message GetResponse {
+  repeated DataEntry      entries = 1;
+  repeated DataEntryError errors  = 2;
+}
+
+// ── Set ──────────────────────────────────────────────────────────────────────
+
+message SetRequest {
+  repeated EntryUpdate updates = 1;
+}
+
+message EntryUpdate {
+  DataEntry      entry  = 1;
+  repeated Field fields = 2;
+}
+
+message SetResponse {
+  Error                   error  = 1;
+  repeated DataEntryError errors = 2;
+}
+
+// ── Subscribe ────────────────────────────────────────────────────────────────
+
+message SubscribeRequest {
+  repeated SubscribeEntry entries = 1;
+}
+
+message SubscribeEntry {
+  string         path   = 1;
+  View           view   = 2;
+  repeated Field fields = 3;
+}
+
+message SubscribeResponse {
+  repeated EntryUpdate updates = 1;
+}
+
+// ── Server info ──────────────────────────────────────────────────────────────
+
+message GetServerInfoRequest {}
+
+message GetServerInfoResponse {
+  string name    = 1;
+  string version = 2;
+}

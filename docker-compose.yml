@@ -1,3 +1,13 @@
+# All 20 sidecar services share this image; only kuksa2mqtt-01 has build: set.
+x-sidecar-defaults: &sidecar-defaults
+  image: kuksa2mqtt:local
+  depends_on:
+    mosquitto:
+      condition: service_healthy
+    seed:
+      condition: service_completed_successfully
+  restart: on-failure
+
 services:
 
   # ── MQTT broker ────────────────────────────────────────────────────────────
@@ -143,324 +153,265 @@ services:
     restart: "no"
 
   # ── kuksa2mqtt sidecars (one per vehicle) ──────────────────────────────────
+  # kuksa2mqtt-01 builds the image; all other sidecars reuse kuksa2mqtt:local.
+  # To rebuild: docker compose build kuksa2mqtt-01
   kuksa2mqtt-01:
+    <<: *sidecar-defaults
     build: ./kuksa2mqtt
     environment:
       KUKSA_HOST: databroker-01
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0001
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0001
+      VEHICLE_BRAND: Toyota
+      VEHICLE_MODEL: Camry
+      VEHICLE_LAT:   "48.8566"
+      VEHICLE_LON:   "2.3522"
 
   kuksa2mqtt-02:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-02
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0002
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0002
+      VEHICLE_BRAND: Ford
+      VEHICLE_MODEL: Mustang
+      VEHICLE_LAT:   "48.8601"
+      VEHICLE_LON:   "2.3488"
 
   kuksa2mqtt-03:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-03
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0003
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0003
+      VEHICLE_BRAND: Renault
+      VEHICLE_MODEL: Clio
+      VEHICLE_LAT:   "48.8635"
+      VEHICLE_LON:   "2.3310"
 
   kuksa2mqtt-04:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-04
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0004
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0004
+      VEHICLE_BRAND: Peugeot
+      VEHICLE_MODEL: Bipper
+      VEHICLE_LAT:   "48.8502"
+      VEHICLE_LON:   "2.3451"
 
   kuksa2mqtt-05:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-05
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0005
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0005
+      VEHICLE_BRAND: Volkswagen
+      VEHICLE_MODEL: Golf
+      VEHICLE_LAT:   "48.8450"
+      VEHICLE_LON:   "2.3700"
 
   kuksa2mqtt-06:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-06
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0006
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0006
+      VEHICLE_BRAND: Mercedes
+      VEHICLE_MODEL: Sprinter
+      VEHICLE_LAT:   "48.8710"
+      VEHICLE_LON:   "2.3410"
 
   kuksa2mqtt-07:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-07
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0007
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0007
+      VEHICLE_BRAND: Audi
+      VEHICLE_MODEL: A4
+      VEHICLE_LAT:   "48.8678"
+      VEHICLE_LON:   "2.3156"
 
   kuksa2mqtt-08:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-08
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0008
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0008
+      VEHICLE_BRAND: "Citroën"
+      VEHICLE_MODEL: Berlingo
+      VEHICLE_LAT:   "48.8530"
+      VEHICLE_LON:   "2.2980"
 
   kuksa2mqtt-09:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-09
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0009
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0009
+      VEHICLE_BRAND: Nissan
+      VEHICLE_MODEL: Leaf
+      VEHICLE_LAT:   "48.8820"
+      VEHICLE_LON:   "2.3600"
 
   kuksa2mqtt-10:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-10
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0010
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0010
+      VEHICLE_BRAND: Tesla
+      VEHICLE_MODEL: "Model 3"
+      VEHICLE_LAT:   "48.8750"
+      VEHICLE_LON:   "2.2890"
 
   kuksa2mqtt-11:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-11
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0011
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0011
+      VEHICLE_BRAND: BMW
+      VEHICLE_MODEL: 320i
+      VEHICLE_LAT:   "48.8470"
+      VEHICLE_LON:   "2.3210"
 
   kuksa2mqtt-12:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-12
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0012
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0012
+      VEHICLE_BRAND: Honda
+      VEHICLE_MODEL: Civic
+      VEHICLE_LAT:   "48.8390"
+      VEHICLE_LON:   "2.3550"
 
   kuksa2mqtt-13:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-13
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0013
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0013
+      VEHICLE_BRAND: Hyundai
+      VEHICLE_MODEL: "Ioniq 5"
+      VEHICLE_LAT:   "48.8610"
+      VEHICLE_LON:   "2.4010"
 
   kuksa2mqtt-14:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-14
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0014
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0014
+      VEHICLE_BRAND: Kia
+      VEHICLE_MODEL: EV6
+      VEHICLE_LAT:   "48.8340"
+      VEHICLE_LON:   "2.3380"
 
   kuksa2mqtt-15:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-15
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0015
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0015
+      VEHICLE_BRAND: Volvo
+      VEHICLE_MODEL: XC40
+      VEHICLE_LAT:   "48.8900"
+      VEHICLE_LON:   "2.3120"
 
   kuksa2mqtt-16:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-16
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0016
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0016
+      VEHICLE_BRAND: Stellantis
+      VEHICLE_MODEL: e-208
+      VEHICLE_LAT:   "48.8420"
+      VEHICLE_LON:   "2.4100"
 
   kuksa2mqtt-17:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-17
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0017
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0017
+      VEHICLE_BRAND: Fiat
+      VEHICLE_MODEL: 500e
+      VEHICLE_LAT:   "48.8560"
+      VEHICLE_LON:   "2.4200"
 
   kuksa2mqtt-18:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-18
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0018
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0018
+      VEHICLE_BRAND: Subaru
+      VEHICLE_MODEL: Outback
+      VEHICLE_LAT:   "48.8780"
+      VEHICLE_LON:   "2.4050"
 
   kuksa2mqtt-19:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-19
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0019
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
+      VEHICLE_VIN:   VIN-0019
+      VEHICLE_BRAND: Mazda
+      VEHICLE_MODEL: CX-5
+      VEHICLE_LAT:   "48.8310"
+      VEHICLE_LON:   "2.2800"
 
   kuksa2mqtt-20:
-    build: ./kuksa2mqtt
+    <<: *sidecar-defaults
     environment:
       KUKSA_HOST: databroker-20
       KUKSA_PORT: "55555"
       MQTT_HOST: mosquitto
       MQTT_PORT: "1883"
-      VEHICLE_VIN: VIN-0020
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-    restart: on-failure
-
-  # ── Rust backend ───────────────────────────────────────────────────────────
-  backend:
-    build: ./backend
-    ports:
-      - "3000:3000"
-    environment:
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-    depends_on:
-      mosquitto:
-        condition: service_healthy
-      seed:
-        condition: service_completed_successfully
-
-  # ── Vue 3 frontend ─────────────────────────────────────────────────────────
-  frontend:
-    build: ./frontend
-    ports:
-      - "8080:8080"
-    depends_on:
-      - backend
+      VEHICLE_VIN:   VIN-0020
+      VEHICLE_BRAND: BMW
+      VEHICLE_MODEL: X5
+      VEHICLE_LAT:   "48.8710"
+      VEHICLE_LON:   "2.4150"
