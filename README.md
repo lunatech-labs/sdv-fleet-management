@@ -33,14 +33,53 @@ Eclipse Mosquitto (port 1883)
 
 ### Infrastructure
 
-- [ ] Write `docker-compose.yml`
-  - [ ] `mosquitto` service with config
-  - [ ] 20 `databroker-{01..20}` services (ports 55556–55575)
-  - [ ] `seed` service with `depends_on` + healthcheck gate
-  - [ ] 20 `kuksa2mqtt-{01..20}` sidecar services
-  - [ ] `backend` service
-  - [ ] `frontend` service
-- [ ] Write Mosquitto config (`mosquitto.conf`) — allow anonymous, listen on 1883
+- [x] Write `docker-compose.yml`
+  - [x] `mosquitto` service with config
+  - [x] 20 `databroker-{01..20}` services (ports 55556–55575)
+  - [x] `seed` service with `depends_on` + healthcheck gate
+  - [x] 20 `kuksa2mqtt-{01..20}` sidecar services
+  - [x] `backend` service
+  - [x] `frontend` service
+- [x] Write Mosquitto config (`mosquitto.conf`) — allow anonymous, listen on 1883
+
+#### Testing the infrastructure
+
+Spin up only the services that exist so far (Mosquitto + all Databrokers):
+
+```sh
+docker compose up mosquitto databroker-01 databroker-02 databroker-03 databroker-04 \
+  databroker-05 databroker-06 databroker-07 databroker-08 databroker-09 databroker-10 \
+  databroker-11 databroker-12 databroker-13 databroker-14 databroker-15 databroker-16 \
+  databroker-17 databroker-18 databroker-19 databroker-20
+```
+
+**Check Mosquitto is up:**
+
+```sh
+# Subscribe to the system topic — should print broker stats every second
+mosquitto_sub -h localhost -p 1883 -t '$SYS/#' -v
+```
+
+**Check a Databroker is up (requires `grpcurl`):**
+
+```sh
+# Should return a list of VSS signal entries (empty at this stage, before seed runs)
+grpcurl -plaintext localhost:55556 list
+```
+
+**Check all 20 Databroker ports are listening:**
+
+```sh
+for port in $(seq 55556 55575); do
+  echo -n "port $port: " && nc -z localhost $port && echo "OK" || echo "FAIL"
+done
+```
+
+**Tear down:**
+
+```sh
+docker compose down
+```
 
 ### Seed Script (`seed/`)
 
