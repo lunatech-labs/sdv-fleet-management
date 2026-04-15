@@ -91,6 +91,7 @@ docker compose down
   - [x] Exit with code 0 on success
 - [x] Write `seed/Dockerfile`
 - [ ] **TODO:** Upgrade `kuksa-client` to 0.5.0 — requires the databroker image to also be upgraded to a version that implements the `PublishValue` RPC. The two must be bumped together. Pinned to 0.4.3 for now.
+- [ ] **TODO:** Set up a proper local Python environment for the seed (`requirements.txt` + venv or `uv`) so the script can be run and tested without rebuilding the Docker image.
 
 #### Testing the seed
 
