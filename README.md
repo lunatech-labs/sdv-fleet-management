@@ -59,108 +59,44 @@ The Mosquitto broker mounts its config file from `./mosquitto/mosquitto.conf` as
 
 ---
 
-## Todo
+## Testing
 
 ### Infrastructure
 
-- [x] Write `docker-compose.yml`
-  - [x] `mosquitto` service with config
-  - [x] 20 `databroker-{01..20}` services (ports 55556–55575)
-  - [x] `seed` service with `depends_on` + healthcheck gate
-  - [x] 20 `kuksa2mqtt-{01..20}` sidecar services
-  - [x] `backend` service
-  - [x] `frontend` service
-- [x] Write Mosquitto config (`mosquitto.conf`) — allow anonymous, listen on 1883
-
-#### Testing the infrastructure
-
-Spin up only the services that exist so far (Mosquitto + all Databrokers):
-
 ```sh
-docker compose up mosquitto databroker-01 databroker-02 databroker-03 databroker-04 \
-  databroker-05 databroker-06 databroker-07 databroker-08 databroker-09 databroker-10 \
-  databroker-11 databroker-12 databroker-13 databroker-14 databroker-15 databroker-16 \
-  databroker-17 databroker-18 databroker-19 databroker-20
+docker compose up mosquitto databroker-01 ... databroker-20
 ```
 
-**Check Mosquitto is up:**
-
 ```sh
-# Subscribe to the system topic — should print broker stats every second
+# Mosquitto is accepting connections
 mosquitto_sub -h localhost -p 1883 -t '$SYS/#' -v
-```
 
-**Check a Databroker is up (requires `grpcurl`):**
-
-```sh
-# Should return a list of VSS signal entries (empty at this stage, before seed runs)
-grpcurl -plaintext localhost:55556 list
-```
-
-**Check all 20 Databroker ports are listening:**
-
-```sh
+# All 20 databroker ports are listening
 for port in $(seq 55556 55575); do
   echo -n "port $port: " && nc -z localhost $port && echo "OK" || echo "FAIL"
 done
-```
 
-**Tear down:**
-
-```sh
-docker compose down
-```
-
-### Seed Script (`seed/`)
-
-- [x] Create `seed/vehicles.json` — 20-vehicle dataset (VIN, brand, model, software version, initial lat/lon)
-- [x] Write `seed/seed.py`
-  - [x] Connect to each of the 20 Databrokers over gRPC (`kuksa-client`)
-  - [x] Write 4 static VSS signals per vehicle: `Vehicle.VehicleIdentification.VIN`, `Brand`, `Model`, `Vehicle.SoftwareVersion`
-  - [x] Write initial `Vehicle.CurrentLocation.Latitude` and `Longitude`
-  - [x] Exit with code 0 on success
-- [x] Write `seed/Dockerfile`
-- [ ] **TODO:** Upgrade `kuksa-client` to 0.5.0 — requires the databroker image to also be upgraded to a version that implements the `PublishValue` RPC. The two must be bumped together. Pinned to 0.4.3 for now.
-- [ ] **TODO:** Set up a proper local Python environment for the seed (`requirements.txt` + venv or `uv`) so the script can be run and tested without rebuilding the Docker image.
-
-#### Testing the seed
-
-Start Mosquitto and the Databrokers, then run the seed container in isolation:
-
-```sh
-# 1. Bring up Mosquitto and all Databrokers
-docker compose up -d mosquitto databroker-01 databroker-02 databroker-03 databroker-04 \
-  databroker-05 databroker-06 databroker-07 databroker-08 databroker-09 databroker-10 \
-  databroker-11 databroker-12 databroker-13 databroker-14 databroker-15 databroker-16 \
-  databroker-17 databroker-18 databroker-19 databroker-20
-
-# 2. Build and run the seed (follows startup logs, exits when done)
-docker compose up --build seed
-```
-
-The seed should log `✓ seeded` for each vehicle and exit with code 0.
-
-**Verify seeded signals with `grpcurl`:**
-
-```sh
-# Install grpcurl (macOS)
-brew install grpcurl
-
-# List all services on a databroker
+# A databroker responds to gRPC (requires grpcurl: brew install grpcurl)
 grpcurl -plaintext localhost:55556 list
+```
 
-# List all RPC methods on the VAL service
-grpcurl -plaintext localhost:55556 list kuksa.val.v1.VAL
+### Seed
 
-# Describe the Get request message (shows available fields)
-grpcurl -plaintext localhost:55556 describe kuksa.val.v1.GetRequest
+```sh
+docker compose up -d mosquitto databroker-01 ... databroker-20
+docker compose up --build seed
+# Expected: "✓ seeded" for each vehicle, exits 0
+```
 
+Verify seeded signals with `grpcurl`:
+
+```sh
 # Read the VIN from databroker-01
 grpcurl -plaintext \
   -d '{"entries": [{"path": "Vehicle.VehicleIdentification.VIN", "fields": ["FIELD_VALUE"]}]}' \
   localhost:55556 kuksa.val.v1.VAL/Get
 
-# Read all five seeded signals from databroker-01
+# Read all five seeded signals
 grpcurl -plaintext \
   -d '{"entries": [
     {"path": "Vehicle.VehicleIdentification.VIN",   "fields": ["FIELD_VALUE"]},
@@ -172,46 +108,18 @@ grpcurl -plaintext \
   localhost:55556 kuksa.val.v1.VAL/Get
 ```
 
-Expected: responses containing `"string_value": "VIN-0001"` for the VIN, and numeric values for latitude/longitude.
-
-**Tear down:**
+### kuksa2mqtt sidecar
 
 ```sh
-docker compose down
-```
-
-### kuksa2mqtt Sidecar (`kuksa2mqtt/`)
-
-- [x] Initialise Rust crate (`Cargo.toml`)
-- [x] Write `src/main.rs`
-  - [x] Read config from env: `KUKSA_HOST`, `KUKSA_PORT`, `MQTT_HOST`, `VEHICLE_VIN`
-  - [x] Connect to local Databroker via gRPC
-  - [x] Connect to Mosquitto via MQTT (`rumqttc`)
-  - [x] GPS random walk loop (1 Hz, σ ≈ 0.0002°)
-    - [x] Generate new lat/lon delta
-    - [x] Write updated values to Databroker
-    - [x] Publish to `kuksa/{vin}/telemetry/CurrentLocation/Latitude` and `Longitude`
-- [x] Write `Dockerfile`
-
-#### Testing the sidecar
-
-Build and run the full stack up to and including the sidecars:
-
-```sh
-# Bring up infrastructure + seed + one sidecar to verify
 docker compose up --build mosquitto databroker-01 seed kuksa2mqtt-01
 ```
 
-**Verify MQTT messages are flowing (requires `mqtt-cli`):**
-
 ```sh
-brew install mqtt-cli
-
-# Subscribe to all telemetry for VIN-0001 — should see lat/lon messages every second
+# MQTT messages flowing at 1 Hz (requires mqtt-cli: brew install mqtt-cli)
 mqtt sub -h localhost -p 1883 --topic='kuksa/VIN-0001/telemetry/#'
 ```
 
-Expected output (updating at 1 Hz):
+Expected output:
 ```
 kuksa/VIN-0001/telemetry/VehicleIdentification/VIN   VIN-0001
 kuksa/VIN-0001/telemetry/VehicleIdentification/Brand Toyota
@@ -221,112 +129,42 @@ kuksa/VIN-0001/telemetry/CurrentLocation/Longitude   2.3529
 ...
 ```
 
-**Bring up all 20 sidecars:**
+### Backend
 
 ```sh
-docker compose up --build
+docker compose up   # sidecars must be running for MQTT data to flow
 ```
-
-### Rust Backend (`backend/`)
-
-- [x] Initialise Rust crate (`Cargo.toml`) with dependencies: `axum`, `rumqttc`, `tokio`, `dashmap`, `serde`/`serde_json`, `chrono`, `tower-http`, `utoipa`/`utoipa-swagger-ui`, `tracing`/`tracing-subscriber`
-- [x] `src/models.rs` — define `VehicleRecord` and `PositionEvent` with serde + utoipa derives
-- [x] `src/store.rs` — `DashMap<String, VehicleRecord>` wrapper
-- [x] `src/mqtt.rs`
-  - [x] Connect to Mosquitto on startup
-  - [x] Subscribe to `kuksa/+/telemetry/#`
-  - [x] Parse topic: extract VIN (segment 1) and signal name (trailing path)
-  - [x] Update `DashMap` on each message
-  - [x] Broadcast `PositionEvent` on lat/lon updates
-- [x] `src/api/fleet.rs`
-  - [x] `GET /fleet` — return all vehicle records
-  - [x] `GET /vehicles/{vin}` — return single vehicle record
-  - [x] `GET /health` — liveness check
-- [x] `src/api/ws.rs` — `WS /ws/fleet` — subscribe to broadcast, stream `PositionEvent` JSON
-- [x] `src/main.rs` — wire axum router, CORS middleware, OpenAPI/Swagger at `/docs`, start MQTT loop
-- [x] Write `Dockerfile`
-
-#### Testing the backend
-
-Start the full stack (infrastructure + seed + sidecars + backend):
-
-```sh
-docker compose up --build backend
-```
-
-**Health check:**
 
 ```sh
 curl http://localhost:3000/health
-# Expected: 200 OK
-```
-
-**Fleet endpoint — all 20 vehicles:**
-
-```sh
 curl -s http://localhost:3000/fleet | jq '.[0]'
-# Expected: first vehicle record with vin, brand, model, software_version, latitude, longitude, last_seen
-```
-
-**Single vehicle:**
-
-```sh
 curl -s http://localhost:3000/vehicles/VIN-0001 | jq
-# Expected: full VehicleRecord for VIN-0001
-# 404 if the VIN doesn't exist
-```
 
-**Swagger UI:**
+# Swagger UI
+open http://localhost:3000/docs
 
-Open [http://localhost:3000/docs](http://localhost:3000/docs) in a browser — should render the interactive OpenAPI documentation.
-
-**WebSocket — live position stream:**
-
-```sh
-# Requires websocat: brew install websocat
+# WebSocket live stream (requires websocat: brew install websocat)
 websocat ws://localhost:3000/ws/fleet
-# Expected: a stream of JSON position events at ~1 Hz per vehicle:
 # {"vin":"VIN-0003","lat":48.8641,"lon":2.3318}
 # {"vin":"VIN-0011","lat":48.8462,"lon":2.3204}
-# ...
 ```
 
-### Frontend (`frontend/`)
+### Frontend
 
-- [x] Scaffold Vue 3 project (`package.json`, Vite config)
-- [x] Install dependencies: `leaflet`, `@vue-leaflet/vue-leaflet`
-- [x] `src/useFleetSocket.ts` — WebSocket composable (connect, parse `PositionEvent`, expose reactive state)
-- [x] `src/MapView.vue`
-  - [x] Full-screen Leaflet map
-  - [x] Place 20 pins on initial `GET /fleet` load
-  - [x] Update pin positions on each WebSocket message
-  - [x] Emit pin-click event with vehicle data
-- [x] `src/VehicleDrawer.vue` — side drawer showing VIN, brand, model, software version on pin click
-- [x] `src/App.vue` — compose map + drawer, call `GET /fleet` on mount, open WebSocket
-- [ ] (Optional) Fleet table view — tabular display of all 20 records
-- [x] Write `Dockerfile` (Vite build + static serve)
+```sh
+docker compose up --build
+open http://localhost:8080
+```
 
-### End-to-end Validation
+- 20 vehicle pins visible on the Paris map
+- Pins move in real time (~1 Hz)
+- Clicking a pin opens the drawer with VIN, brand, model, and software version
 
-- [x] `docker compose up` — all services start cleanly
-- [x] Seed exits with code 0; sidecars start after seed completes
-- [x] Backend logs show MQTT messages arriving for all 20 VINs
-- [x] `GET http://localhost:3000/fleet` returns 20 vehicle records
-- [x] `GET http://localhost:3000/health` returns `200 OK`
-- [x] `GET http://localhost:3000/docs` renders Swagger UI
-- [x] Browser map shows 20 pins moving in real time
-- [x] Clicking a pin opens the drawer with correct metadata
-
-### Testing
-
-- [ ] **Seed** — add `pytest` suite with a mocked `VSSClient`; assert correct signals are written and `Vehicle.SoftwareVersion` is never attempted
-- [ ] **Seed** — set up `requirements.txt` + local venv (or `uv`) so the script can be run and tested without Docker
-- [ ] **Backend** — extract `build_router(state)` from `main()` to enable in-process axum testing
-- [ ] **Backend** — unit tests for `Store`: `update_position` returns `None` for unknown VIN, `last_seen` is updated on write
-- [ ] **Backend** — integration tests for REST endpoints using `tower::ServiceExt::oneshot`: `GET /fleet` empty, `GET /vehicles/:vin` 404, `GET /health` 200
-- [ ] **Frontend** — add Vitest + Vue Test Utils; test `useFleetSocket` reconnect logic and message parsing, `VehicleDrawer` renders/hides correctly
-- [ ] **E2E** — Playwright test against the full Docker stack: 20 markers visible, pin click opens drawer, marker position changes after 3 s
-- [ ] **TODO:** Upgrade `kuksa-client` to 0.5.0 — requires the databroker image to also be upgraded to a version that implements the `PublishValue` RPC. The two must be bumped together. Pinned to 0.4.3 for now.
+For local development without Docker:
+```sh
+cd frontend && npm install
+VITE_BACKEND_URL=http://localhost:3000 npm run dev
+```
 
 ---
 
