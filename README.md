@@ -293,29 +293,40 @@ websocat ws://localhost:3000/ws/fleet
 
 ### Frontend (`frontend/`)
 
-- [ ] Scaffold Vue 3 project (`package.json`, Vite config)
-- [ ] Install dependencies: `leaflet`, `@vue-leaflet/vue-leaflet`
-- [ ] `src/useFleetSocket.ts` — WebSocket composable (connect, parse `PositionEvent`, expose reactive state)
-- [ ] `src/MapView.vue`
-  - [ ] Full-screen Leaflet map
-  - [ ] Place 20 pins on initial `GET /fleet` load
-  - [ ] Update pin positions on each WebSocket message
-  - [ ] Emit pin-click event with vehicle data
-- [ ] `src/VehicleDrawer.vue` — side drawer showing VIN, brand, model, software version on pin click
-- [ ] `src/App.vue` — compose map + drawer, call `GET /fleet` on mount, open WebSocket
+- [x] Scaffold Vue 3 project (`package.json`, Vite config)
+- [x] Install dependencies: `leaflet`, `@vue-leaflet/vue-leaflet`
+- [x] `src/useFleetSocket.ts` — WebSocket composable (connect, parse `PositionEvent`, expose reactive state)
+- [x] `src/MapView.vue`
+  - [x] Full-screen Leaflet map
+  - [x] Place 20 pins on initial `GET /fleet` load
+  - [x] Update pin positions on each WebSocket message
+  - [x] Emit pin-click event with vehicle data
+- [x] `src/VehicleDrawer.vue` — side drawer showing VIN, brand, model, software version on pin click
+- [x] `src/App.vue` — compose map + drawer, call `GET /fleet` on mount, open WebSocket
 - [ ] (Optional) Fleet table view — tabular display of all 20 records
-- [ ] Write `Dockerfile` (Vite build + static serve)
+- [x] Write `Dockerfile` (Vite build + static serve)
 
 ### End-to-end Validation
 
-- [ ] `docker compose up` — all 43 services start cleanly
-- [ ] Seed exits with code 0; sidecars start after seed completes
-- [ ] Backend logs show MQTT messages arriving for all 20 VINs
-- [ ] `GET http://localhost:3000/fleet` returns 20 vehicle records
-- [ ] `GET http://localhost:3000/health` returns `200 OK`
-- [ ] `GET http://localhost:3000/docs` renders Swagger UI
-- [ ] Browser map shows 20 pins moving in real time
-- [ ] Clicking a pin opens the drawer with correct metadata
+- [x] `docker compose up` — all services start cleanly
+- [x] Seed exits with code 0; sidecars start after seed completes
+- [x] Backend logs show MQTT messages arriving for all 20 VINs
+- [x] `GET http://localhost:3000/fleet` returns 20 vehicle records
+- [x] `GET http://localhost:3000/health` returns `200 OK`
+- [x] `GET http://localhost:3000/docs` renders Swagger UI
+- [x] Browser map shows 20 pins moving in real time
+- [x] Clicking a pin opens the drawer with correct metadata
+
+### Testing
+
+- [ ] **Seed** — add `pytest` suite with a mocked `VSSClient`; assert correct signals are written and `Vehicle.SoftwareVersion` is never attempted
+- [ ] **Seed** — set up `requirements.txt` + local venv (or `uv`) so the script can be run and tested without Docker
+- [ ] **Backend** — extract `build_router(state)` from `main()` to enable in-process axum testing
+- [ ] **Backend** — unit tests for `Store`: `update_position` returns `None` for unknown VIN, `last_seen` is updated on write
+- [ ] **Backend** — integration tests for REST endpoints using `tower::ServiceExt::oneshot`: `GET /fleet` empty, `GET /vehicles/:vin` 404, `GET /health` 200
+- [ ] **Frontend** — add Vitest + Vue Test Utils; test `useFleetSocket` reconnect logic and message parsing, `VehicleDrawer` renders/hides correctly
+- [ ] **E2E** — Playwright test against the full Docker stack: 20 markers visible, pin click opens drawer, marker position changes after 3 s
+- [ ] **TODO:** Upgrade `kuksa-client` to 0.5.0 — requires the databroker image to also be upgraded to a version that implements the `PublishValue` RPC. The two must be bumped together. Pinned to 0.4.3 for now.
 
 ---
 
