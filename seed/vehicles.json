@@ -1,0 +1,22 @@
+[
+  { "vin": "VIN-0001", "brand": "Toyota",     "model": "Camry",    "software_version": "1.4.2", "latitude": 48.8566, "longitude": 2.3522 },
+  { "vin": "VIN-0002", "brand": "Ford",       "model": "Mustang",  "software_version": "2.1.0", "latitude": 48.8601, "longitude": 2.3488 },
+  { "vin": "VIN-0003", "brand": "Renault",    "model": "Clio",     "software_version": "2.1.0", "latitude": 48.8635, "longitude": 2.3310 },
+  { "vin": "VIN-0004", "brand": "Peugeot",    "model": "Bipper",   "software_version": "2.1.0", "latitude": 48.8502, "longitude": 2.3451 },
+  { "vin": "VIN-0005", "brand": "Volkswagen", "model": "Golf",     "software_version": "3.0.0", "latitude": 48.8450, "longitude": 2.3700 },
+  { "vin": "VIN-0006", "brand": "Mercedes",   "model": "Sprinter", "software_version": "1.9.1", "latitude": 48.8710, "longitude": 2.3410 },
+  { "vin": "VIN-0007", "brand": "Audi",       "model": "A4",       "software_version": "2.5.3", "latitude": 48.8678, "longitude": 2.3156 },
+  { "vin": "VIN-0008", "brand": "Citroën",    "model": "Berlingo", "software_version": "1.2.0", "latitude": 48.8530, "longitude": 2.2980 },
+  { "vin": "VIN-0009", "brand": "Nissan",     "model": "Leaf",     "software_version": "4.0.1", "latitude": 48.8820, "longitude": 2.3600 },
+  { "vin": "VIN-0010", "brand": "Tesla",      "model": "Model 3",  "software_version": "5.1.2", "latitude": 48.8750, "longitude": 2.2890 },
+  { "vin": "VIN-0011", "brand": "BMW",        "model": "320i",     "software_version": "2.0.0", "latitude": 48.8470, "longitude": 2.3210 },
+  { "vin": "VIN-0012", "brand": "Honda",      "model": "Civic",    "software_version": "1.7.4", "latitude": 48.8390, "longitude": 2.3550 },
+  { "vin": "VIN-0013", "brand": "Hyundai",    "model": "Ioniq 5",  "software_version": "3.2.1", "latitude": 48.8610, "longitude": 2.4010 },
+  { "vin": "VIN-0014", "brand": "Kia",        "model": "EV6",      "software_version": "2.8.0", "latitude": 48.8340, "longitude": 2.3380 },
+  { "vin": "VIN-0015", "brand": "Volvo",      "model": "XC40",     "software_version": "1.5.9", "latitude": 48.8900, "longitude": 2.3120 },
+  { "vin": "VIN-0016", "brand": "Stellantis", "model": "e-208",    "software_version": "2.2.2", "latitude": 48.8420, "longitude": 2.4100 },
+  { "vin": "VIN-0017", "brand": "Fiat",       "model": "500e",     "software_version": "1.0.5", "latitude": 48.8560, "longitude": 2.4200 },
+  { "vin": "VIN-0018", "brand": "Subaru",     "model": "Outback",  "software_version": "3.1.0", "latitude": 48.8780, "longitude": 2.4050 },
+  { "vin": "VIN-0019", "brand": "Mazda",      "model": "CX-5",     "software_version": "2.3.7", "latitude": 48.8310, "longitude": 2.2800 },
+  { "vin": "VIN-0020", "brand": "BMW",        "model": "X5",       "software_version": "3.0.1", "latitude": 48.8710, "longitude": 2.4150 }
+]
