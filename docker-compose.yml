@@ -416,7 +416,6 @@ services:
       VEHICLE_LAT:   "48.8710"
       VEHICLE_LON:   "2.4150"
 
-
   # ── Rust backend ───────────────────────────────────────────────────────────
   backend:
     build: ./backend
@@ -433,3 +432,14 @@ services:
         condition: service_healthy
       seed:
         condition: service_completed_successfully
+
+  # ── Vue 3 frontend ─────────────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        VITE_BACKEND_URL: http://localhost:3000
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
