@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
 use tokio::sync::broadcast;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::models::PositionEvent;
 use crate::store::Store;
@@ -28,6 +28,7 @@ pub async fn start(
     loop {
         match eventloop.poll().await {
             Ok(Event::Incoming(Packet::Publish(p))) => {
+                debug!("MQTT publish received on topic: {}", p.topic);
                 let topic   = p.topic.as_str();
                 let payload = match std::str::from_utf8(&p.payload) {
                     Ok(s)  => s.to_string(),
@@ -74,7 +75,10 @@ fn handle_signal(
                 Err(_) => { warn!("bad latitude for {vin}: {value}"); return; }
             };
             if let Some((new_lat, lon)) = store.update_position(vin, Some(lat), None) {
+                debug!("broadcasting PositionEvent for {vin}: lat={new_lat}, lon={lon}");
                 let _ = tx.send(PositionEvent { vin: vin.to_string(), lat: new_lat, lon });
+            } else {
+                warn!("received latitude for unknown VIN: {vin}");
             }
         }
         "CurrentLocation/Longitude" => {
@@ -83,7 +87,10 @@ fn handle_signal(
                 Err(_) => { warn!("bad longitude for {vin}: {value}"); return; }
             };
             if let Some((lat, new_lon)) = store.update_position(vin, None, Some(lon)) {
+                debug!("broadcasting PositionEvent for {vin}: lat={lat}, lon={new_lon}");
                 let _ = tx.send(PositionEvent { vin: vin.to_string(), lat, lon: new_lon });
+            } else {
+                warn!("received longitude for unknown VIN: {vin}");
             }
         }
         _ => {}

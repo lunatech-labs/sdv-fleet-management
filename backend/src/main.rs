@@ -29,7 +29,7 @@ pub struct AppState {
 
 #[derive(OpenApi)]
 #[openapi(
-    paths(fleet::get_fleet, fleet::get_vehicle, fleet::health),
+    paths(fleet::get_fleet, fleet::get_vehicle, fleet::health, ws::ws_fleet),
     components(schemas(VehicleRecord, PositionEvent)),
     info(
         title       = "Fleet Orchestrator API",

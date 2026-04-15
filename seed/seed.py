@@ -34,7 +34,7 @@ VSS_SIGNALS = [
 
 
 def seed_vehicle(vehicle: dict, index: int) -> None:
-    """Connect to the databroker for this vehicle and write all six signals."""
+    """Connect to the databroker for this vehicle and write all five signals."""
     host = f"databroker-{index:02d}"
     port = 55555
     vin  = vehicle["vin"]
