@@ -1,5 +1,5 @@
 {
-  "name": "fleet-orchestrator-frontend",
+  "name": "sdv-fleet-management-frontend",
   "version": "0.1.0",
   "scripts": {
     "dev": "vite",

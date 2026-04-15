@@ -32,7 +32,7 @@ pub struct AppState {
     paths(fleet::get_fleet, fleet::get_vehicle, fleet::health, ws::ws_fleet),
     components(schemas(VehicleRecord, PositionEvent)),
     info(
-        title       = "Fleet Orchestrator API",
+        title       = "SDV Fleet Management API",
         version     = "1.0.0",
         description = "Live vehicle telemetry — REST + WebSocket"
     )

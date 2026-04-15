@@ -1,4 +1,4 @@
-# Fleet Orchestrator — v1 Demo
+# SDV Fleet Management — v1 Demo
 
 A client-facing demo showcasing Rust as a high-performance backend for vehicle fleet management, using Eclipse Kuksa to simulate a realistic fleet of 20 vehicles. Live GPS positions flow from per-vehicle Kuksa Databrokers → MQTT → Rust backend → browser map.
 
