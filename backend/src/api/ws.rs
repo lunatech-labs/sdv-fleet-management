@@ -6,11 +6,18 @@ use axum::{
     response::IntoResponse,
 };
 use tokio::sync::broadcast;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::{models::PositionEvent, AppState};
 
 /// Upgrade to a WebSocket connection and stream PositionEvents at 1 Hz per vehicle.
+#[utoipa::path(
+    get,
+    path = "/ws/fleet",
+    responses(
+        (status = 101, description = "WebSocket upgrade — streams PositionEvent JSON at ~1 Hz per vehicle"),
+    )
+)]
 pub async fn ws_fleet(
     ws:           WebSocketUpgrade,
     State(state): State<AppState>,
@@ -36,6 +43,7 @@ async fn handle_socket(
                             Ok(s)  => s,
                             Err(e) => { warn!("serialisation error: {e}"); continue; }
                         };
+                        debug!("sending to WebSocket client: {json}");
                         if socket.send(Message::Text(json)).await.is_err() {
                             break; // client disconnected
                         }
