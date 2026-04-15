@@ -1,5 +1,7 @@
-# All 20 sidecar services share this image; only kuksa2mqtt-01 has build: set.
+# build + image together: BuildKit deduplicates the build across all 20 sidecars
+# and tags the result as kuksa2mqtt:local, preventing a Docker Hub pull on first run.
 x-sidecar-defaults: &sidecar-defaults
+  build: ./kuksa2mqtt
   image: kuksa2mqtt:local
   depends_on:
     mosquitto:
@@ -153,11 +155,8 @@ services:
     restart: "no"
 
   # ── kuksa2mqtt sidecars (one per vehicle) ──────────────────────────────────
-  # kuksa2mqtt-01 builds the image; all other sidecars reuse kuksa2mqtt:local.
-  # To rebuild: docker compose build kuksa2mqtt-01
   kuksa2mqtt-01:
     <<: *sidecar-defaults
-    build: ./kuksa2mqtt
     environment:
       KUKSA_HOST: databroker-01
       KUKSA_PORT: "55555"

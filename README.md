@@ -44,9 +44,9 @@ This guarantees the order: Mosquitto → Databrokers → Seed → Sidecars.
 
 The `x-sidecar-defaults` block at the top of the file uses Docker Compose's extension field convention (`x-` prefix). It defines shared configuration — `image`, `depends_on`, and `restart` — once, and each sidecar service merges it in with the YAML merge key `<<: *sidecar-defaults`. This avoids repeating the same 8 lines across all 20 services.
 
-### Single build, shared image
+### BuildKit deduplication
 
-All 20 `kuksa2mqtt` sidecar services are identical except for their environment variables. Only `kuksa2mqtt-01` has a `build:` directive; the other 19 reference the same `image: kuksa2mqtt:local` tag. Docker builds the image once and all containers reuse it — avoiding the race condition that occurs when 20 parallel builds try to tar the same build context simultaneously.
+All 20 `kuksa2mqtt` sidecar services share the same `build: ./kuksa2mqtt` and `image: kuksa2mqtt:local` in the YAML anchor. Docker BuildKit is smart enough to build the image only once even though all 20 services declare it — subsequent services hit the cache immediately. The `image:` tag is also what prevents Docker from trying to pull `kuksa2mqtt:local` from Docker Hub on first run.
 
 To rebuild the sidecar image:
 ```sh
