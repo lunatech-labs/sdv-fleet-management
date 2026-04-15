@@ -4,6 +4,17 @@ A client-facing demo showcasing Rust as a high-performance backend for vehicle f
 
 ---
 
+## Quickstart
+
+```sh
+git clone git@github.com:lunatech-labs/sdv-fleet-management.git
+cd sdv-fleet-management
+
+docker compose up
+```
+
+Then visit: `http://localhost:8080`.
+
 ## Architecture
 
 ```
