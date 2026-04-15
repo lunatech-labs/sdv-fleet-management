@@ -70,7 +70,7 @@ Rust backend (axum, port 3000)
 
 ## Key design decisions
 
-**Single build, shared sidecar image.** Only `kuksa2mqtt-01` has a `build:` directive in `docker-compose.yml`. The other 19 sidecars reference `image: kuksa2mqtt:local`. This prevents a parallel-build race condition on the Cargo.lock file. To rebuild: `docker compose build kuksa2mqtt-01`.
+**BuildKit deduplicates the sidecar build.** All 20 sidecars declare `build: ./kuksa2mqtt` and `image: kuksa2mqtt:local` via the shared YAML anchor. BuildKit builds the image once; the `image:` tag prevents Docker from pulling `kuksa2mqtt:local` from Docker Hub. To rebuild: `docker compose build kuksa2mqtt-01`.
 
 **Sidecar reads static vehicle data from env, not the databroker.** Brand, Model, and initial lat/lon come from environment variables (`VEHICLE_BRAND`, `VEHICLE_MODEL`, `VEHICLE_LAT`, `VEHICLE_LON`). The sidecar only *writes* to the databroker (GPS updates via gRPC `Set`). Attempting to read VSS attribute signals back via gRPC was unreliable with this databroker version.
 

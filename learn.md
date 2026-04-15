@@ -22,8 +22,10 @@ Without these conditions, Docker Compose starts services concurrently and race c
 - [Docker Compose — `depends_on`](https://docs.docker.com/compose/how-tos/startup-order/)
 - [Docker — HEALTHCHECK](https://docs.docker.com/reference/dockerfile/#healthcheck)
 
-### Single build, shared image
-When multiple services share the same build context, building them in parallel causes a race condition on the file system (multiple tars of the same directory at once). The fix: give only one service the `build:` directive and set a shared `image:` tag on all of them. Docker builds once; every container reuses the cached image layer.
+### BuildKit build deduplication
+When multiple Compose services declare the same `build:` context, Docker BuildKit builds the image only once and reuses the cached result for all subsequent services. Pairing `build:` with an `image:` tag in the same service definition also prevents Docker from attempting to pull that tag from Docker Hub when the image doesn't exist locally yet.
+
+- [Docker BuildKit overview](https://docs.docker.com/build/buildkit/)
 
 ---
 
