@@ -1,0 +1,468 @@
+services:
+
+  # ── MQTT broker ────────────────────────────────────────────────────────────
+  mosquitto:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/#' -C 1 -i healthcheck -W 3"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ── Kuksa Databrokers (one per vehicle) ────────────────────────────────────
+  databroker-01:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55556:55555"]
+
+  databroker-02:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55557:55555"]
+
+  databroker-03:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55558:55555"]
+
+  databroker-04:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55559:55555"]
+
+  databroker-05:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55560:55555"]
+
+  databroker-06:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55561:55555"]
+
+  databroker-07:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55562:55555"]
+
+  databroker-08:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55563:55555"]
+
+  databroker-09:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55564:55555"]
+
+  databroker-10:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55565:55555"]
+
+  databroker-11:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55566:55555"]
+
+  databroker-12:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55567:55555"]
+
+  databroker-13:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55568:55555"]
+
+  databroker-14:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55569:55555"]
+
+  databroker-15:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55570:55555"]
+
+  databroker-16:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55571:55555"]
+
+  databroker-17:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55572:55555"]
+
+  databroker-18:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55573:55555"]
+
+  databroker-19:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55574:55555"]
+
+  databroker-20:
+    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
+    command: ["--insecure"]
+    ports: ["55575:55555"]
+
+  # ── Seed script ────────────────────────────────────────────────────────────
+  # Connects to each databroker and writes static VSS signals + initial GPS.
+  # Retries gRPC connections internally; exits 0 on success.
+  seed:
+    build: ./seed
+    environment:
+      DATABROKER_BASE_PORT: "55555"
+    depends_on:
+      - databroker-01
+      - databroker-02
+      - databroker-03
+      - databroker-04
+      - databroker-05
+      - databroker-06
+      - databroker-07
+      - databroker-08
+      - databroker-09
+      - databroker-10
+      - databroker-11
+      - databroker-12
+      - databroker-13
+      - databroker-14
+      - databroker-15
+      - databroker-16
+      - databroker-17
+      - databroker-18
+      - databroker-19
+      - databroker-20
+    restart: "no"
+
+  # ── kuksa2mqtt sidecars (one per vehicle) ──────────────────────────────────
+  kuksa2mqtt-01:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-01
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0001
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-02:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-02
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0002
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-03:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-03
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0003
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-04:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-04
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0004
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-05:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-05
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0005
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-06:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-06
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0006
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-07:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-07
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0007
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-08:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-08
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0008
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-09:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-09
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0009
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-10:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-10
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0010
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-11:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-11
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0011
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-12:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-12
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0012
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-13:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-13
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0013
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-14:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-14
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0014
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-15:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-15
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0015
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-16:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-16
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0016
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-17:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-17
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0017
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-18:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-18
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0018
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-19:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-19
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0019
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  kuksa2mqtt-20:
+    build: ./kuksa2mqtt
+    environment:
+      KUKSA_HOST: databroker-20
+      KUKSA_PORT: "55555"
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+      VEHICLE_VIN: VIN-0020
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+    restart: on-failure
+
+  # ── Rust backend ───────────────────────────────────────────────────────────
+  backend:
+    build: ./backend
+    ports:
+      - "3000:3000"
+    environment:
+      MQTT_HOST: mosquitto
+      MQTT_PORT: "1883"
+    depends_on:
+      mosquitto:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+
+  # ── Vue 3 frontend ─────────────────────────────────────────────────────────
+  frontend:
+    build: ./frontend
+    ports:
+      - "8080:8080"
+    depends_on:
+      - backend
