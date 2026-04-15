@@ -90,6 +90,7 @@ docker compose down
   - [x] Write initial `Vehicle.CurrentLocation.Latitude` and `Longitude`
   - [x] Exit with code 0 on success
 - [x] Write `seed/Dockerfile`
+- [ ] **TODO:** Upgrade `kuksa-client` to 0.5.0 — requires the databroker image to also be upgraded to a version that implements the `PublishValue` RPC. The two must be bumped together. Pinned to 0.4.3 for now.
 
 #### Testing the seed
 
