@@ -39,6 +39,19 @@ pub struct AppState {
 )]
 struct ApiDoc;
 
+// ── Router ────────────────────────────────────────────────────────────────────
+
+pub fn build_router(state: AppState) -> Router {
+    Router::new()
+        .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        .route("/health",        get(fleet::health))
+        .route("/fleet",         get(fleet::get_fleet))
+        .route("/vehicles/:vin", get(fleet::get_vehicle))
+        .route("/ws/fleet",      get(ws::ws_fleet))
+        .with_state(state)
+        .layer(CorsLayer::permissive())
+}
+
 // ── Entry point ───────────────────────────────────────────────────────────────
 
 #[tokio::main]
@@ -98,14 +111,7 @@ async fn main() {
     ));
 
     // ── Axum router ───────────────────────────────────────────────────────────
-    let app = Router::new()
-        .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .route("/health",        get(fleet::health))
-        .route("/fleet",         get(fleet::get_fleet))
-        .route("/vehicles/:vin", get(fleet::get_vehicle))
-        .route("/ws/fleet",      get(ws::ws_fleet))
-        .with_state(state)
-        .layer(CorsLayer::permissive());
+    let app = build_router(state);
 
     info!("listening on {}", bind_addr);
     let listener = tokio::net::TcpListener::bind(&bind_addr)
@@ -113,4 +119,102 @@ async fn main() {
         .unwrap_or_else(|e| panic!("failed to bind {bind_addr}: {e}"));
 
     axum::serve(listener, app).await.expect("server error");
+}
+
+// ── Tests ─────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{body::Body, http::{Request, StatusCode}};
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+
+    fn test_state() -> AppState {
+        let (tx, _) = broadcast::channel(1);
+        AppState { store: Store::new(), tx }
+    }
+
+    async fn spawn_test_server(state: AppState) -> std::net::SocketAddr {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, build_router(state)).await.unwrap()
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn health_returns_200() {
+        let response = build_router(test_state())
+            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn fleet_empty_store_returns_empty_array() {
+        let response = build_router(test_state())
+            .oneshot(Request::builder().uri("/fleet").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        assert_eq!(&body[..], b"[]");
+    }
+
+    #[tokio::test]
+    async fn get_vehicle_unknown_vin_returns_404() {
+        let response = build_router(test_state())
+            .oneshot(Request::builder().uri("/vehicles/UNKNOWN").body(Body::empty()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn ws_forwards_position_event() {
+        use futures_util::StreamExt;
+        use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+        let (tx, _) = broadcast::channel(16);
+        let state = AppState { store: Store::new(), tx: tx.clone() };
+        let addr = spawn_test_server(state).await;
+
+        let (mut ws, _) = connect_async(format!("ws://{addr}/ws/fleet")).await.unwrap();
+
+        let event = PositionEvent { vin: "VIN-TEST".into(), lat: 48.85, lon: 2.35 };
+        tx.send(event).unwrap();
+
+        let msg = ws.next().await.unwrap().unwrap();
+        let text = match msg {
+            Message::Text(t) => t,
+            other => panic!("expected text frame, got {other:?}"),
+        };
+        let received: PositionEvent = serde_json::from_str(&text).unwrap();
+        assert_eq!(received.vin, "VIN-TEST");
+        assert_eq!(received.lat, 48.85);
+        assert_eq!(received.lon, 2.35);
+    }
+
+    #[tokio::test]
+    async fn ws_handles_client_close() {
+        use futures_util::{SinkExt, StreamExt};
+        use tokio_tungstenite::{connect_async, tungstenite::Message};
+
+        let (tx, _) = broadcast::channel(1);
+        let state = AppState { store: Store::new(), tx };
+        let addr = spawn_test_server(state).await;
+
+        let (mut ws, _) = connect_async(format!("ws://{addr}/ws/fleet")).await.unwrap();
+
+        ws.send(Message::Close(None)).await.unwrap();
+
+        // Drain until the stream ends — server should echo the close and terminate.
+        while let Some(msg) = ws.next().await {
+            if matches!(msg, Ok(Message::Close(_)) | Err(_)) { break; }
+        }
+        // Reaching here without panic means the handler closed cleanly.
+    }
 }

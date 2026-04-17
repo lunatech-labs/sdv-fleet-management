@@ -16,3 +16,9 @@ utoipa              = { version = "4", features = ["axum_extras", "chrono"] }
 utoipa-swagger-ui   = { version = "6", features = ["axum"] }
 tracing             = "0.1"
 tracing-subscriber  = { version = "0.3", features = ["env-filter"] }
+
+[dev-dependencies]
+tower             = { version = "0.4", features = ["util"] }
+http-body-util    = "0.1"
+tokio-tungstenite = "0.24"
+futures-util      = "=0.3.31"
