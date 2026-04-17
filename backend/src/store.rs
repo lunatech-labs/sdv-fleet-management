@@ -42,8 +42,12 @@ impl Store {
         lon: Option<f64>,
     ) -> Option<(f64, f64)> {
         let mut record = self.0.get_mut(vin)?;
-        if let Some(v) = lat { record.latitude  = v; }
-        if let Some(v) = lon { record.longitude = v; }
+        if let Some(v) = lat {
+            record.latitude = v;
+        }
+        if let Some(v) = lon {
+            record.longitude = v;
+        }
         record.last_seen = Utc::now();
         Some((record.latitude, record.longitude))
     }

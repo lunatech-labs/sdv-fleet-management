@@ -179,6 +179,27 @@ VITE_BACKEND_URL=http://localhost:3000 npm run dev
 
 ---
 
+## Contributing
+
+### Backend (Rust)
+
+```sh
+cd backend
+
+# Format
+cargo fmt
+
+# Lint
+cargo clippy -- -D warnings
+
+# Test
+cargo test
+```
+
+All three steps run automatically on every push to `main` via GitHub Actions (`.github/workflows/backend.yml`).
+
+---
+
 ## Port Reference
 
 | Service | Host port |

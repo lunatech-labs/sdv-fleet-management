@@ -18,19 +18,13 @@ use crate::{models::PositionEvent, AppState};
         (status = 101, description = "WebSocket upgrade — streams PositionEvent JSON at ~1 Hz per vehicle"),
     )
 )]
-pub async fn ws_fleet(
-    ws:           WebSocketUpgrade,
-    State(state): State<AppState>,
-) -> impl IntoResponse {
+pub async fn ws_fleet(ws: WebSocketUpgrade, State(state): State<AppState>) -> impl IntoResponse {
     // Subscribe before the upgrade so no events are missed during the handshake.
     let rx = state.tx.subscribe();
     ws.on_upgrade(move |socket| handle_socket(socket, rx))
 }
 
-async fn handle_socket(
-    mut socket: WebSocket,
-    mut rx:     broadcast::Receiver<PositionEvent>,
-) {
+async fn handle_socket(mut socket: WebSocket, mut rx: broadcast::Receiver<PositionEvent>) {
     info!("WebSocket client connected");
 
     loop {
