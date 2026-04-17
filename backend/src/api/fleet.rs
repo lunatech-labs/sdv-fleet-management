@@ -32,13 +32,9 @@ pub async fn get_fleet(State(state): State<AppState>) -> Json<Vec<VehicleRecord>
 )]
 pub async fn get_vehicle(
     State(state): State<AppState>,
-    Path(vin):    Path<String>,
+    Path(vin): Path<String>,
 ) -> Result<Json<VehicleRecord>, StatusCode> {
-    state
-        .store
-        .get(&vin)
-        .map(Json)
-        .ok_or(StatusCode::NOT_FOUND)
+    state.store.get(&vin).map(Json).ok_or(StatusCode::NOT_FOUND)
 }
 
 /// Liveness probe.

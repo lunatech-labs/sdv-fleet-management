@@ -22,7 +22,7 @@ use store::Store;
 #[derive(Clone)]
 pub struct AppState {
     pub store: Store,
-    pub tx:    broadcast::Sender<PositionEvent>,
+    pub tx: broadcast::Sender<PositionEvent>,
 }
 
 // ── OpenAPI doc ───────────────────────────────────────────────────────────────
@@ -32,8 +32,8 @@ pub struct AppState {
     paths(fleet::get_fleet, fleet::get_vehicle, fleet::health, ws::ws_fleet),
     components(schemas(VehicleRecord, PositionEvent)),
     info(
-        title       = "SDV Fleet Management API",
-        version     = "1.0.0",
+        title = "SDV Fleet Management API",
+        version = "1.0.0",
         description = "Live vehicle telemetry — REST + WebSocket"
     )
 )]
@@ -44,10 +44,10 @@ struct ApiDoc;
 pub fn build_router(state: AppState) -> Router {
     Router::new()
         .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", ApiDoc::openapi()))
-        .route("/health",        get(fleet::health))
-        .route("/fleet",         get(fleet::get_fleet))
+        .route("/health", get(fleet::health))
+        .route("/fleet", get(fleet::get_fleet))
         .route("/vehicles/:vin", get(fleet::get_vehicle))
-        .route("/ws/fleet",      get(ws::ws_fleet))
+        .route("/ws/fleet", get(ws::ws_fleet))
         .with_state(state)
         .layer(CorsLayer::permissive())
 }
@@ -86,13 +86,13 @@ async fn main() {
 
     for s in seeds {
         store.insert(VehicleRecord {
-            vin:              s.vin,
-            brand:            s.brand,
-            model:            s.model,
+            vin: s.vin,
+            brand: s.brand,
+            model: s.model,
             software_version: s.software_version,
-            latitude:         s.latitude,
-            longitude:        s.longitude,
-            last_seen:        Utc::now(),
+            latitude: s.latitude,
+            longitude: s.longitude,
+            last_seen: Utc::now(),
         });
     }
     info!("store pre-populated with {} vehicles", store.all().len());
@@ -126,28 +126,37 @@ async fn main() {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axum::{body::Body, http::{Request, StatusCode}};
+    use axum::{
+        body::Body,
+        http::{Request, StatusCode},
+    };
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
     fn test_state() -> AppState {
         let (tx, _) = broadcast::channel(1);
-        AppState { store: Store::new(), tx }
+        AppState {
+            store: Store::new(),
+            tx,
+        }
     }
 
     async fn spawn_test_server(state: AppState) -> std::net::SocketAddr {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
-        tokio::spawn(async move {
-            axum::serve(listener, build_router(state)).await.unwrap()
-        });
+        tokio::spawn(async move { axum::serve(listener, build_router(state)).await.unwrap() });
         addr
     }
 
     #[tokio::test]
     async fn health_returns_200() {
         let response = build_router(test_state())
-            .oneshot(Request::builder().uri("/health").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/health")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -156,7 +165,12 @@ mod tests {
     #[tokio::test]
     async fn fleet_empty_store_returns_empty_array() {
         let response = build_router(test_state())
-            .oneshot(Request::builder().uri("/fleet").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/fleet")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
@@ -167,7 +181,12 @@ mod tests {
     #[tokio::test]
     async fn get_vehicle_unknown_vin_returns_404() {
         let response = build_router(test_state())
-            .oneshot(Request::builder().uri("/vehicles/UNKNOWN").body(Body::empty()).unwrap())
+            .oneshot(
+                Request::builder()
+                    .uri("/vehicles/UNKNOWN")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -179,12 +198,21 @@ mod tests {
         use tokio_tungstenite::{connect_async, tungstenite::Message};
 
         let (tx, _) = broadcast::channel(16);
-        let state = AppState { store: Store::new(), tx: tx.clone() };
+        let state = AppState {
+            store: Store::new(),
+            tx: tx.clone(),
+        };
         let addr = spawn_test_server(state).await;
 
-        let (mut ws, _) = connect_async(format!("ws://{addr}/ws/fleet")).await.unwrap();
+        let (mut ws, _) = connect_async(format!("ws://{addr}/ws/fleet"))
+            .await
+            .unwrap();
 
-        let event = PositionEvent { vin: "VIN-TEST".into(), lat: 48.85, lon: 2.35 };
+        let event = PositionEvent {
+            vin: "VIN-TEST".into(),
+            lat: 48.85,
+            lon: 2.35,
+        };
         tx.send(event).unwrap();
 
         let msg = ws.next().await.unwrap().unwrap();
@@ -204,16 +232,23 @@ mod tests {
         use tokio_tungstenite::{connect_async, tungstenite::Message};
 
         let (tx, _) = broadcast::channel(1);
-        let state = AppState { store: Store::new(), tx };
+        let state = AppState {
+            store: Store::new(),
+            tx,
+        };
         let addr = spawn_test_server(state).await;
 
-        let (mut ws, _) = connect_async(format!("ws://{addr}/ws/fleet")).await.unwrap();
+        let (mut ws, _) = connect_async(format!("ws://{addr}/ws/fleet"))
+            .await
+            .unwrap();
 
         ws.send(Message::Close(None)).await.unwrap();
 
         // Drain until the stream ends — server should echo the close and terminate.
         while let Some(msg) = ws.next().await {
-            if matches!(msg, Ok(Message::Close(_)) | Err(_)) { break; }
+            if matches!(msg, Ok(Message::Close(_)) | Err(_)) {
+                break;
+            }
         }
         // Reaching here without panic means the handler closed cleanly.
     }

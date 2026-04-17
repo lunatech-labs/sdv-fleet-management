@@ -8,8 +8,8 @@ use crate::models::PositionEvent;
 use crate::store::Store;
 
 pub async fn start(
-    store:     Store,
-    tx:        broadcast::Sender<PositionEvent>,
+    store: Store,
+    tx: broadcast::Sender<PositionEvent>,
     mqtt_host: String,
     mqtt_port: u16,
 ) {
@@ -23,22 +23,27 @@ pub async fn start(
         .await
         .expect("failed to subscribe to kuksa telemetry");
 
-    info!("MQTT connected to {}:{}, subscribed to kuksa/+/telemetry/#", mqtt_host, mqtt_port);
+    info!(
+        "MQTT connected to {}:{}, subscribed to kuksa/+/telemetry/#",
+        mqtt_host, mqtt_port
+    );
 
     loop {
         match eventloop.poll().await {
             Ok(Event::Incoming(Packet::Publish(p))) => {
                 debug!("MQTT publish received on topic: {}", p.topic);
-                let topic   = p.topic.as_str();
+                let topic = p.topic.as_str();
                 let payload = match std::str::from_utf8(&p.payload) {
-                    Ok(s)  => s.to_string(),
+                    Ok(s) => s.to_string(),
                     Err(_) => continue,
                 };
 
                 // Topic shape: kuksa/{vin}/telemetry/{signal_path}
                 let parts: Vec<&str> = topic.splitn(4, '/').collect();
-                if parts.len() < 4 { continue; }
-                let vin    = parts[1];
+                if parts.len() < 4 {
+                    continue;
+                }
+                let vin = parts[1];
                 let signal = parts[3];
 
                 handle_signal(&store, &tx, vin, signal, payload);
@@ -53,11 +58,11 @@ pub async fn start(
 }
 
 fn handle_signal(
-    store:  &Store,
-    tx:     &broadcast::Sender<PositionEvent>,
-    vin:    &str,
+    store: &Store,
+    tx: &broadcast::Sender<PositionEvent>,
+    vin: &str,
     signal: &str,
-    value:  String,
+    value: String,
 ) {
     match signal {
         "VehicleIdentification/VIN" => {
@@ -71,24 +76,38 @@ fn handle_signal(
         }
         "CurrentLocation/Latitude" => {
             let lat: f64 = match value.parse() {
-                Ok(v)  => v,
-                Err(_) => { warn!("bad latitude for {vin}: {value}"); return; }
+                Ok(v) => v,
+                Err(_) => {
+                    warn!("bad latitude for {vin}: {value}");
+                    return;
+                }
             };
             if let Some((new_lat, lon)) = store.update_position(vin, Some(lat), None) {
                 debug!("broadcasting PositionEvent for {vin}: lat={new_lat}, lon={lon}");
-                let _ = tx.send(PositionEvent { vin: vin.to_string(), lat: new_lat, lon });
+                let _ = tx.send(PositionEvent {
+                    vin: vin.to_string(),
+                    lat: new_lat,
+                    lon,
+                });
             } else {
                 warn!("received latitude for unknown VIN: {vin}");
             }
         }
         "CurrentLocation/Longitude" => {
             let lon: f64 = match value.parse() {
-                Ok(v)  => v,
-                Err(_) => { warn!("bad longitude for {vin}: {value}"); return; }
+                Ok(v) => v,
+                Err(_) => {
+                    warn!("bad longitude for {vin}: {value}");
+                    return;
+                }
             };
             if let Some((lat, new_lon)) = store.update_position(vin, None, Some(lon)) {
                 debug!("broadcasting PositionEvent for {vin}: lat={lat}, lon={new_lon}");
-                let _ = tx.send(PositionEvent { vin: vin.to_string(), lat, lon: new_lon });
+                let _ = tx.send(PositionEvent {
+                    vin: vin.to_string(),
+                    lat,
+                    lon: new_lon,
+                });
             } else {
                 warn!("received longitude for unknown VIN: {vin}");
             }
