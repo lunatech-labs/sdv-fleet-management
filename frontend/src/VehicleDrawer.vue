@@ -7,8 +7,16 @@ defineEmits<{ close: [] }>()
 
 <template>
   <Transition name="drawer">
-    <div v-if="vehicle" class="drawer">
-      <button class="close" @click="$emit('close')">✕</button>
+    <div
+      v-if="vehicle"
+      class="drawer"
+    >
+      <button
+        class="close"
+        @click="$emit('close')"
+      >
+        ✕
+      </button>
       <h2>{{ vehicle.brand }} {{ vehicle.model }}</h2>
       <dl>
         <dt>VIN</dt>      <dd>{{ vehicle.vin }}</dd>

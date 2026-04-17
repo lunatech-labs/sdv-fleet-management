@@ -7,7 +7,11 @@ defineEmits<{ select: [vehicle: VehicleRecord] }>()
 </script>
 
 <template>
-  <l-map :zoom="13" :center="[48.8566, 2.3522]" style="height: 100%; width: 100%;">
+  <l-map
+    :zoom="13"
+    :center="[48.8566, 2.3522]"
+    style="height: 100%; width: 100%;"
+  >
     <l-tile-layer
       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
       attribution="&copy; <a href='https://www.openstreetmap.org/copyright'>OpenStreetMap</a> contributors"

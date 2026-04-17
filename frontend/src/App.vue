@@ -23,8 +23,14 @@ useFleetSocket((event: PositionEvent) => {
 
 <template>
   <div class="app">
-    <MapView :vehicles="vehicles" @select="selected = $event" />
-    <VehicleDrawer :vehicle="selected" @close="selected = null" />
+    <MapView
+      :vehicles="vehicles"
+      @select="selected = $event"
+    />
+    <VehicleDrawer
+      :vehicle="selected"
+      @close="selected = null"
+    />
   </div>
 </template>
 
