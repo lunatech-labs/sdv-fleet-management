@@ -198,6 +198,17 @@ cargo test
 
 All three steps run automatically on every push to `main` via GitHub Actions (`.github/workflows/backend.yml`).
 
+### Frontend (Vue 3 + TypeScript)
+
+```sh
+cd frontend
+
+# Lint
+npm run lint
+```
+
+Runs automatically on every push to `main` via GitHub Actions (`.github/workflows/frontend.yml`).
+
 ---
 
 ## Port Reference
