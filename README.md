@@ -205,6 +205,9 @@ cd frontend
 
 # Lint
 npm run lint
+
+# Unit tests
+npm test
 ```
 
 Runs automatically on every push to `main` via GitHub Actions (`.github/workflows/frontend.yml`).
