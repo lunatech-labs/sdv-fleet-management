@@ -12,7 +12,7 @@
 - [x] Integration tests for REST endpoints: `GET /fleet` (empty store), `GET /vehicles/:vin` (404), `GET /health` (200).
 - [x] WebSocket integration tests: event forwarding, client-initiated close.
 - [x] GitHub Actions CI: `cargo fmt --check`, `cargo clippy`, `cargo test` on push to `main`.
-- [ ] Unit tests for `Store`: `update_position` returns `None` for unknown VIN, `last_seen` is updated on write.
+- [x] Unit tests for `Store`: `update_position` returns `None` for unknown VIN, `last_seen` is updated on write.
 
 ## Frontend
 
