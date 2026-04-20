@@ -2,9 +2,9 @@
 
 ## Seed
 
-- [ ] Upgrade `kuksa-client` to 0.5.0 — requires the databroker image to also be upgraded to a version that implements the `PublishValue` RPC. The two must be bumped together. Pinned to 0.4.3 for now.
-- [ ] Set up `requirements.txt` + local venv (or `uv`) so the seed script can be run and tested without rebuilding the Docker image.
-- [ ] Add `pytest` suite with a mocked `VSSClient`: assert correct signals are written and `Vehicle.SoftwareVersion` is never attempted.
+- [ ] Upgrade `kuksa-client` to 0.5.0 — requires the databroker image to also be upgraded to a version that implements the `PublishValue` RPC. The two must be bumped together. Pinned to 0.4.3 for now. **Investigation (2026-04-20):** `kuksa-client==0.5.0` calls `client_stub_v2.PublishValueRequest` which does not exist in `kuksa-databroker:0.6.1` (latest). The databroker v2 API does not yet expose this method. Blocked until a databroker release ships `PublishValueRequest` in its v2 stub.
+- [x] Set up `requirements.txt` + local venv (or `uv`) so the seed script can be run and tested without rebuilding the Docker image.
+- [x] Add `pytest` suite with a mocked `VSSClient`: assert correct signals are written and `Vehicle.SoftwareVersion` is never attempted.
 
 ## Backend
 
