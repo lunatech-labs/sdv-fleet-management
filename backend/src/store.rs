@@ -75,7 +75,9 @@ mod tests {
     #[test]
     fn update_position_unknown_vin_returns_none() {
         let store = Store::new();
-        assert!(store.update_position("UNKNOWN-VIN", Some(1.0), Some(2.0)).is_none());
+        assert!(store
+            .update_position("UNKNOWN-VIN", Some(1.0), Some(2.0))
+            .is_none());
     }
 
     #[test]
