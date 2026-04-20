@@ -1,0 +1,32 @@
+version: 2
+updates:
+  - package-ecosystem: 'docker-compose'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    cooldown:
+      default-days: 7
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+    cooldown:
+      default-days: 7
+  - package-ecosystem: 'pip'
+    directory: '/seed'
+    schedule:
+      interval: 'weekly'
+    cooldown:
+      default-days: 7
+  - package-ecosystem: 'cargo'
+    directory: '/backend'
+    schedule:
+      interval: 'weekly'
+    cooldown:
+      default-days: 7
+  - package-ecosystem: 'cargo'
+    directory: '/kuksa2mqtt'
+    schedule:
+      interval: 'weekly'
+    cooldown:
+      default-days: 7
