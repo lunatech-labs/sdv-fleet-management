@@ -209,6 +209,25 @@ npm run lint
 
 Runs automatically on every push to `main` via GitHub Actions (`.github/workflows/frontend.yml`).
 
+### End-to-end tests (Playwright)
+
+```sh
+docker compose up -d          # full stack must be running
+
+cd e2e
+npm install
+npm run install-browsers      # first time only — downloads Chromium
+npm test
+```
+
+Overrides (useful when the ports are remapped):
+
+```sh
+PLAYWRIGHT_BASE_URL=http://localhost:8080 \
+PLAYWRIGHT_BACKEND_URL=http://localhost:3000 \
+npm test
+```
+
 ---
 
 ## Port Reference

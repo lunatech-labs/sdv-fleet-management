@@ -21,7 +21,7 @@
 
 ## E2E
 
-- [ ] Playwright test against the full Docker stack: 20 markers visible, pin click opens drawer with correct VIN, marker position changes within 3 s.
+- [x] Playwright test against the full Docker stack: 20 markers visible, pin click opens drawer with correct VIN, marker position changes within 3 s.
 
 ## V2
 
