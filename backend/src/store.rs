@@ -52,3 +52,43 @@ impl Store {
         Some((record.latitude, record.longitude))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::Store;
+    use crate::models::VehicleRecord;
+
+    fn make_record(vin: &str) -> VehicleRecord {
+        VehicleRecord {
+            vin: vin.to_string(),
+            brand: "Acme".to_string(),
+            model: "X1".to_string(),
+            software_version: "1.0.0".to_string(),
+            latitude: 0.0,
+            longitude: 0.0,
+            last_seen: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn update_position_unknown_vin_returns_none() {
+        let store = Store::new();
+        assert!(store.update_position("UNKNOWN-VIN", Some(1.0), Some(2.0)).is_none());
+    }
+
+    #[test]
+    fn update_position_known_vin_updates_last_seen() {
+        let store = Store::new();
+        let mut record = make_record("VIN-0001");
+        let before = Utc::now();
+        record.last_seen = before;
+        store.insert(record);
+
+        store.update_position("VIN-0001", Some(48.8), Some(2.3));
+
+        let updated = store.get("VIN-0001").unwrap();
+        assert!(updated.last_seen > before);
+    }
+}
