@@ -16,8 +16,8 @@
 
 ## Frontend
 
-- [ ] Add Vitest + Vue Test Utils: test `useFleetSocket` reconnect logic and message parsing, `VehicleDrawer` renders/hides correctly.
-- [ ] (Optional) Fleet table view — tabular display of all 20 vehicle records alongside the map.
+- [x] Add Vitest + Vue Test Utils: test `useFleetSocket` reconnect logic and message parsing, `VehicleDrawer` renders/hides correctly.
+- [x] (Optional) Fleet table view — tabular display of all 20 vehicle records alongside the map.
 
 ## E2E
 
