@@ -1,0 +1,120 @@
+syntax = "proto3";
+
+package kuksa.val.v1;
+
+// ── Datapoint ────────────────────────────────────────────────────────────────
+
+message Datapoint {
+  oneof value {
+    string string_value  = 11;
+    bool   bool_value    = 12;
+    sint32 int32_value   = 13;
+    sint64 int64_value   = 14;
+    uint32 uint32_value  = 15;
+    uint64 uint64_value  = 16;
+    float  float_value   = 17;
+    double double_value  = 18;
+
+    StringArray string_array  = 21;
+    BoolArray   bool_array    = 22;
+    Int32Array  int32_array   = 23;
+    Int64Array  int64_array   = 24;
+    Uint32Array uint32_array  = 25;
+    Uint64Array uint64_array  = 26;
+    FloatArray  float_array   = 27;
+    DoubleArray double_array  = 28;
+  }
+}
+
+message StringArray  { repeated string string_values  = 1; }
+message BoolArray    { repeated bool   bool_values    = 1; }
+message Int32Array   { repeated sint32 int32_values   = 1; }
+message Int64Array   { repeated sint64 int64_values   = 1; }
+message Uint32Array  { repeated uint32 uint32_values  = 1; }
+message Uint64Array  { repeated uint64 uint64_values  = 1; }
+message FloatArray   { repeated float  float_values   = 1; }
+message DoubleArray  { repeated double double_values  = 1; }
+
+// ── Entry ────────────────────────────────────────────────────────────────────
+
+message DataEntry {
+  string    path             = 1;
+  Datapoint value            = 2;
+  Datapoint actuator_target  = 3;
+  Metadata  metadata         = 4;
+}
+
+message Metadata {
+  DataType  data_type   = 11;
+  EntryType entry_type  = 12;
+  string    description = 13;
+  string    comment     = 14;
+  string    deprecation = 15;
+  string    unit        = 16;
+}
+
+// ── Enums ────────────────────────────────────────────────────────────────────
+
+enum Field {
+  FIELD_UNSPECIFIED      = 0;
+  FIELD_VALUE            = 1;
+  FIELD_ACTUATOR_TARGET  = 2;
+  FIELD_METADATA         = 3;
+}
+
+enum View {
+  VIEW_UNSPECIFIED    = 0;
+  VIEW_CURRENT_VALUE  = 1;
+  VIEW_TARGET_VALUE   = 2;
+  VIEW_METADATA       = 3;
+  VIEW_FIELDS         = 4;
+  VIEW_ALL            = 5;
+}
+
+enum DataType {
+  DATA_TYPE_UNSPECIFIED   = 0;
+  DATA_TYPE_STRING        = 1;
+  DATA_TYPE_BOOL          = 2;
+  DATA_TYPE_INT8          = 3;
+  DATA_TYPE_INT16         = 4;
+  DATA_TYPE_INT32         = 5;
+  DATA_TYPE_INT64         = 6;
+  DATA_TYPE_UINT8         = 7;
+  DATA_TYPE_UINT16        = 8;
+  DATA_TYPE_UINT32        = 9;
+  DATA_TYPE_UINT64        = 10;
+  DATA_TYPE_FLOAT         = 11;
+  DATA_TYPE_DOUBLE        = 12;
+  DATA_TYPE_STRING_ARRAY  = 20;
+  DATA_TYPE_BOOL_ARRAY    = 21;
+  DATA_TYPE_INT8_ARRAY    = 22;
+  DATA_TYPE_INT16_ARRAY   = 23;
+  DATA_TYPE_INT32_ARRAY   = 24;
+  DATA_TYPE_INT64_ARRAY   = 25;
+  DATA_TYPE_UINT8_ARRAY   = 26;
+  DATA_TYPE_UINT16_ARRAY  = 27;
+  DATA_TYPE_UINT32_ARRAY  = 28;
+  DATA_TYPE_UINT64_ARRAY  = 29;
+  DATA_TYPE_FLOAT_ARRAY   = 30;
+  DATA_TYPE_DOUBLE_ARRAY  = 31;
+}
+
+enum EntryType {
+  ENTRY_TYPE_UNSPECIFIED = 0;
+  ENTRY_TYPE_ATTRIBUTE   = 1;
+  ENTRY_TYPE_SENSOR      = 2;
+  ENTRY_TYPE_ACTUATOR    = 3;
+}
+
+// ── Errors ───────────────────────────────────────────────────────────────────
+
+message Error {
+  uint32 code    = 1;
+  string reason  = 2;
+  string message = 3;
+}
+
+message DataEntryError {
+  string path  = 1;
+  Error  error = 2;
+}
