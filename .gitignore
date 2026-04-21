@@ -1,6 +1,7 @@
 .claude/
 .DS_Store
 .idea/
+.env
 
 **/target/
 **/node_modules/
