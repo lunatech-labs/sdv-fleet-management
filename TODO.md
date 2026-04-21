@@ -39,13 +39,13 @@
 
 ### Backend
 
-- [ ] Add `reqwest` and `uuid` crates to `backend/Cargo.toml`
-- [ ] Add `backend/src/hawkbit.rs`: HawkBit Management API client (register targets, seed distribution sets, create rollout, report deployment result, poll rollout status)
-- [ ] Add `backend/src/campaign.rs`: `DashMap<CampaignId, Campaign>` store with `VehicleUpdateState` enum
-- [ ] Update `backend/src/mqtt.rs`: subscribe to `kuksa/+/ota/status`, publish `kuksa/{vin}/ota/command`, wire HawkBit feedback and campaign store updates
-- [ ] Update `backend/src/main.rs`: HawkBit startup registration, distribution set seeding, 5s background poll task, new route registration, `HAWKBIT_URL`/`HAWKBIT_TOKEN` env vars
-- [ ] Add `POST /campaigns`, `GET /campaigns`, `GET /campaigns/{id}`, `GET /versions` REST endpoints
-- [ ] Add `WS /ws/campaigns` endpoint (snapshot on connect, then individual transition events)
+- [x] Add `reqwest` and `uuid` crates to `backend/Cargo.toml`
+- [x] Add `backend/src/hawkbit.rs`: HawkBit Management API client (register targets, seed distribution sets, create rollout, report deployment result, poll rollout status)
+- [x] Add `backend/src/campaign.rs`: `DashMap<CampaignId, Campaign>` store with `VehicleUpdateState` enum
+- [x] Update `backend/src/mqtt.rs`: subscribe to `kuksa/+/ota/status`, publish `kuksa/{vin}/ota/command`, wire HawkBit feedback and campaign store updates
+- [x] Update `backend/src/main.rs`: HawkBit startup registration, distribution set seeding, 5s background poll task, new route registration, `HAWKBIT_URL`/`HAWKBIT_TOKEN` env vars
+- [x] Add `POST /campaigns`, `GET /campaigns`, `GET /campaigns/{id}`, `GET /versions` REST endpoints
+- [x] Add `WS /ws/campaigns` endpoint (snapshot on connect, then individual transition events)
 
 ### Frontend
 

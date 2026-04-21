@@ -12,8 +12,11 @@ serde               = { version = "1", features = ["derive"] }
 serde_json          = "1"
 chrono              = { version = "0.4", features = ["serde"] }
 tower-http          = { version = "0.5", features = ["cors"] }
-utoipa              = { version = "4", features = ["axum_extras", "chrono"] }
+utoipa              = { version = "4", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-swagger-ui   = { version = "6", features = ["axum"] }
+reqwest             = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+uuid                = { version = "1", features = ["v4", "serde"] }
+thiserror           = "1"
 tracing             = "0.1"
 tracing-subscriber  = { version = "0.3", features = ["env-filter"] }
 
