@@ -31,11 +31,39 @@ useFleetSocket((event: PositionEvent) => {
         :vehicles="vehicles"
         @select="selected = $event"
       />
-      <button class="toggle-btn" @click="tableVisible = !tableVisible" :title="tableVisible ? 'Hide table' : 'Show table'">
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
-          <rect x="1" y="2" width="14" height="3" rx="1"/>
-          <rect x="1" y="6.5" width="14" height="2.5" rx="1"/>
-          <rect x="1" y="10.5" width="14" height="2.5" rx="1"/>
+      <button
+        class="toggle-btn"
+        :title="tableVisible ? 'Hide table' : 'Show table'"
+        @click="tableVisible = !tableVisible"
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          fill="currentColor"
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <rect
+            x="1"
+            y="2"
+            width="14"
+            height="3"
+            rx="1"
+          />
+          <rect
+            x="1"
+            y="6.5"
+            width="14"
+            height="2.5"
+            rx="1"
+          />
+          <rect
+            x="1"
+            y="10.5"
+            width="14"
+            height="2.5"
+            rx="1"
+          />
         </svg>
       </button>
     </div>

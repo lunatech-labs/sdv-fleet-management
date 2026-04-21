@@ -91,29 +91,62 @@ const groups = computed(() => {
         class="search"
         type="search"
         placeholder="Search VIN, make, model, software..."
-      />
+      >
       <div class="controls">
-        <button v-if="isDirty" class="reset-btn" @click="resetFilters">Reset</button>
+        <button
+          v-if="isDirty"
+          class="reset-btn"
+          @click="resetFilters"
+        >
+          Reset
+        </button>
         <div class="control-group">
           <label>Filter</label>
           <select v-model="filterField">
-            <option value="none">—</option>
-            <option value="brand">Make</option>
-            <option value="model">Model</option>
-            <option value="software_version">Software</option>
+            <option value="none">
+              —
+            </option>
+            <option value="brand">
+              Make
+            </option>
+            <option value="model">
+              Model
+            </option>
+            <option value="software_version">
+              Software
+            </option>
           </select>
-          <select v-if="filterField !== 'none'" v-model="filterValue">
-            <option value="">All</option>
-            <option v-for="opt in filterOptions" :key="opt" :value="opt">{{ opt }}</option>
+          <select
+            v-if="filterField !== 'none'"
+            v-model="filterValue"
+          >
+            <option value="">
+              All
+            </option>
+            <option
+              v-for="opt in filterOptions"
+              :key="opt"
+              :value="opt"
+            >
+              {{ opt }}
+            </option>
           </select>
         </div>
         <div class="control-group">
           <label>Group</label>
           <select v-model="groupBy">
-            <option value="none">—</option>
-            <option value="brand">Make</option>
-            <option value="model">Model</option>
-            <option value="software_version">Software</option>
+            <option value="none">
+              —
+            </option>
+            <option value="brand">
+              Make
+            </option>
+            <option value="model">
+              Model
+            </option>
+            <option value="software_version">
+              Software
+            </option>
           </select>
         </div>
       </div>
@@ -139,18 +172,31 @@ const groups = computed(() => {
             :key="v.vin"
             :class="{ selected: v.vin === selectedVin }"
           >
-            <td class="mono">{{ v.vin }}</td>
+            <td class="mono">
+              {{ v.vin }}
+            </td>
             <td>{{ v.brand }}</td>
             <td>{{ v.model }}</td>
-            <td class="mono">{{ v.software_version }}</td>
-            <td class="mono">{{ v.latitude.toFixed(4) }}</td>
-            <td class="mono">{{ v.longitude.toFixed(4) }}</td>
-            <td class="mono">{{ formatTime(v.last_seen) }}</td>
+            <td class="mono">
+              {{ v.software_version }}
+            </td>
+            <td class="mono">
+              {{ v.latitude.toFixed(4) }}
+            </td>
+            <td class="mono">
+              {{ v.longitude.toFixed(4) }}
+            </td>
+            <td class="mono">
+              {{ formatTime(v.last_seen) }}
+            </td>
           </tr>
         </tbody>
 
         <template v-else>
-          <tbody v-for="group in groups" :key="group.key">
+          <tbody
+            v-for="group in groups"
+            :key="group.key"
+          >
             <tr class="group-header">
               <td colspan="7">
                 {{ group.key }}
@@ -162,19 +208,34 @@ const groups = computed(() => {
               :key="v.vin"
               :class="{ selected: v.vin === selectedVin }"
             >
-              <td class="mono">{{ v.vin }}</td>
+              <td class="mono">
+                {{ v.vin }}
+              </td>
               <td>{{ v.brand }}</td>
               <td>{{ v.model }}</td>
-              <td class="mono">{{ v.software_version }}</td>
-              <td class="mono">{{ v.latitude.toFixed(4) }}</td>
-              <td class="mono">{{ v.longitude.toFixed(4) }}</td>
-              <td class="mono">{{ formatTime(v.last_seen) }}</td>
+              <td class="mono">
+                {{ v.software_version }}
+              </td>
+              <td class="mono">
+                {{ v.latitude.toFixed(4) }}
+              </td>
+              <td class="mono">
+                {{ v.longitude.toFixed(4) }}
+              </td>
+              <td class="mono">
+                {{ formatTime(v.last_seen) }}
+              </td>
             </tr>
           </tbody>
         </template>
       </table>
 
-      <div v-if="filtered.length === 0" class="empty">No vehicles match.</div>
+      <div
+        v-if="filtered.length === 0"
+        class="empty"
+      >
+        No vehicles match.
+      </div>
     </div>
   </div>
 </template>
