@@ -99,6 +99,15 @@ docker compose up --build seed
 # Expected: "✓ seeded" for each vehicle, exits 0
 ```
 
+**Unit tests** (no Docker needed):
+
+```sh
+cd seed
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+pytest tests/ -v
+```
+
 Verify seeded signals with `grpcurl`:
 
 ```sh
