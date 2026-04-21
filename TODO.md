@@ -27,15 +27,15 @@
 
 ### Infrastructure
 
-- [ ] Add HawkBit service to `docker-compose.yml` (port 8083, H2 in-memory DB, `HAWKBIT_TOKEN` env var, healthcheck)
-- [ ] Add `x-ota-agent-defaults` anchor and 20 `ota-agent` services to `docker-compose.yml`
-- [ ] Add `hawkbit: { condition: service_healthy }` dependency to backend service
-- [ ] Create `.env` file at repo root with `HAWKBIT_TOKEN`
+- [x] Add HawkBit service to `docker-compose.yml` (port 8083, H2 in-memory DB, `HAWKBIT_TOKEN` env var, healthcheck)
+- [x] Add `x-ota-agent-defaults` anchor and 20 `ota-agent` services to `docker-compose.yml`
+- [x] Add `hawkbit: { condition: service_healthy }` dependency to backend service
+- [x] Create `.env` file at repo root with `HAWKBIT_TOKEN`
 
 ### ota-agent (new component)
 
-- [ ] Create `ota-agent/Cargo.toml` and `ota-agent/Dockerfile` (mirrors `kuksa2mqtt` BuildKit pattern)
-- [ ] Implement `ota-agent/src/main.rs`: subscribe to `kuksa/{vin}/ota/command`, run state machine (`PENDING -> DOWNLOADING -> INSTALLING -> COMPLETE/FAILED`), publish transitions to `kuksa/{vin}/ota/status`, write new version to Databroker via gRPC on `COMPLETE`
+- [x] Create `ota-agent/Cargo.toml` and `ota-agent/Dockerfile` (mirrors `kuksa2mqtt` BuildKit pattern)
+- [x] Implement `ota-agent/src/main.rs`: subscribe to `kuksa/{vin}/ota/command`, run state machine (`PENDING -> DOWNLOADING -> INSTALLING -> COMPLETE/FAILED`), publish transitions to `kuksa/{vin}/ota/status`, write new version to Databroker via gRPC on `COMPLETE`
 
 ### Backend
 

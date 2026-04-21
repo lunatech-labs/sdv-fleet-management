@@ -10,6 +10,15 @@ x-sidecar-defaults: &sidecar-defaults
       condition: service_completed_successfully
   restart: on-failure
 
+# Same BuildKit dedup pattern as x-sidecar-defaults, one image shared by 20 agents.
+x-ota-agent-defaults: &ota-agent-defaults
+  build: ./ota-agent
+  image: ota-agent:local
+  depends_on:
+    mosquitto:
+      condition: service_healthy
+  restart: on-failure
+
 services:
 
   # ── MQTT broker ────────────────────────────────────────────────────────────
@@ -415,6 +424,222 @@ services:
       VEHICLE_LAT:   "48.8710"
       VEHICLE_LON:   "2.4150"
 
+  # ── Eclipse HawkBit (OTA campaign store) ───────────────────────────────────
+  # H2 in-memory DB: campaign history is lost on restart (demo only).
+  hawkbit:
+    image: hawkbit/hawkbit-update-server:latest
+    ports:
+      - "8083:8080"
+    environment:
+      SPRING_DATASOURCE_URL: jdbc:h2:mem:hawkbit
+      HAWKBIT_TOKEN: ${HAWKBIT_TOKEN}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/management/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # ── ota-agent (one per vehicle) ────────────────────────────────────────────
+  ota-agent-01:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0001
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-01
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-02:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0002
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-02
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-03:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0003
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-03
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-04:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0004
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-04
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-05:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0005
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-05
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-06:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0006
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-06
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-07:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0007
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-07
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-08:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0008
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-08
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-09:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0009
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-09
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-10:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0010
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-10
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-11:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0011
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-11
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-12:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0012
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-12
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-13:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0013
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-13
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-14:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0014
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-14
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-15:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0015
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-15
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-16:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0016
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-16
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-17:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0017
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-17
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-18:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0018
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-18
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-19:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0019
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-19
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
+  ota-agent-20:
+    <<: *ota-agent-defaults
+    environment:
+      VEHICLE_VIN:         VIN-0020
+      MQTT_HOST:           mosquitto
+      KUKSA_HOST:          databroker-20
+      FAILURE_RATE:        "0.2"
+      DOWNLOAD_DELAY_SECS: "5"
+      INSTALL_DELAY_SECS:  "3"
+
   # ── Rust backend ───────────────────────────────────────────────────────────
   backend:
     build: ./backend
@@ -424,6 +649,8 @@ services:
       MQTT_HOST:     mosquitto
       MQTT_PORT:     "1883"
       VEHICLES_FILE: /app/vehicles.json
+      HAWKBIT_URL:   http://hawkbit:8080
+      HAWKBIT_TOKEN: ${HAWKBIT_TOKEN}
     volumes:
       - ./seed/vehicles.json:/app/vehicles.json:ro
     depends_on:
@@ -431,6 +658,8 @@ services:
         condition: service_healthy
       seed:
         condition: service_completed_successfully
+      hawkbit:
+        condition: service_healthy
 
   # ── Vue 3 frontend ─────────────────────────────────────────────────────────
   frontend:

@@ -10,6 +10,9 @@ A client-facing demo showcasing Rust as a high-performance backend for vehicle f
 git clone git@github.com:lunatech-labs/sdv-fleet-management.git
 cd sdv-fleet-management
 
+# Copy .env.example to .env and modify the values if necessary.
+cp .env.example .env
+
 docker compose up
 ```
 
