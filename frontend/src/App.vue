@@ -42,6 +42,7 @@ onTransition((_campaignId, vin, state) => {
     <div class="map-panel">
       <MapView
         :vehicles="vehicles"
+        :campaigns="campaigns"
         @select="selected = $event"
       />
       <button
