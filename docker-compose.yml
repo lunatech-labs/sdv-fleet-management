@@ -468,13 +468,11 @@ services:
       postgres:
         condition: service_healthy
     healthcheck:
-      # /actuator/health is not exposed by hawkbit 0.3.0M7. /UI/login returns
-      # 200 without auth as soon as the embedded Tomcat is ready.
       test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health"]
       interval: 10s
-      timeout: 5s
+      timeout: 15s
       retries: 10
-      start_period: 60s
+      start_period: 90s
 
   # ── ota-agent (one per vehicle) ────────────────────────────────────────────
   ota-agent-01:

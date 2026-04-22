@@ -45,7 +45,7 @@ pub struct HawkbitClient {
 impl HawkbitClient {
     pub fn new(base_url: String, user: String, password: String) -> Self {
         let http = Client::builder()
-            .timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30))
             .build()
             .expect("failed to build reqwest client");
         Self {
