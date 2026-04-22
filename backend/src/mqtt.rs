@@ -1,45 +1,28 @@
-use std::{sync::Arc, time::Duration};
+use std::time::Duration;
 
 use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS};
-use serde::Deserialize;
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
-use uuid::Uuid;
 
-use crate::{
-    campaign::{CampaignEvent, CampaignStore, VehicleUpdateState},
-    hawkbit::HawkbitClient,
-    models::PositionEvent,
-    store::Store,
-};
+use crate::{models::PositionEvent, store::Store};
 
-/// Publish an OTA command to `kuksa/{vin}/ota/command`. QoS 1, not retained —
-/// if the ota-agent is offline at publish time, the command is lost and the
-/// vehicle stays in `PENDING` (see specs-v2.md §6).
-pub async fn publish_ota_command(
-    client: &AsyncClient,
-    vin: &str,
-    campaign_id: Uuid,
-    version: &str,
-) {
-    let topic = format!("kuksa/{}/ota/command", vin);
-    let payload = serde_json::json!({
-        "campaign_id": campaign_id,
-        "version":     version,
-    })
-    .to_string();
+/// Broadcast the HawkBit gateway token to every ota-agent. Published with the
+/// MQTT retained flag so agents that connect later (or reconnect) pick it up
+/// from the broker without needing the backend to re-announce. Without this
+/// token, agents can't authenticate to HawkBit's DDI API and can't self-
+/// register.
+pub async fn publish_gateway_token(client: &AsyncClient, token: &str) {
     if let Err(e) = client
-        .publish(&topic, QoS::AtLeastOnce, false, payload)
+        .publish("fleet/gateway-token", QoS::AtLeastOnce, true, token)
         .await
     {
-        warn!("failed to publish {}: {}", topic, e);
+        warn!("failed to publish fleet/gateway-token: {e}");
     }
 }
 
-/// Build the async MQTT client + event loop and issue both v1 and v2 subscriptions.
-///
-/// Splitting this from [`run`] lets `main` hold onto the `AsyncClient` so HTTP
-/// handlers (e.g. `POST /campaigns`) can publish `kuksa/{vin}/ota/command`.
+/// Build the async MQTT client + event loop. The backend subscribes only to
+/// telemetry (lat/lon) now — OTA dispatch and feedback happen over HawkBit's
+/// DDI API directly between HawkBit and the ota-agent.
 pub async fn connect(mqtt_host: &str, mqtt_port: u16) -> (AsyncClient, EventLoop) {
     let mut opts = MqttOptions::new("fleet-backend", mqtt_host, mqtt_port);
     opts.set_keep_alive(Duration::from_secs(30));
@@ -50,27 +33,20 @@ pub async fn connect(mqtt_host: &str, mqtt_port: u16) -> (AsyncClient, EventLoop
         .subscribe("kuksa/+/telemetry/#", QoS::AtLeastOnce)
         .await
         .expect("failed to subscribe to kuksa telemetry");
-    client
-        .subscribe("kuksa/+/ota/status", QoS::AtLeastOnce)
-        .await
-        .expect("failed to subscribe to kuksa ota status");
 
     info!(
-        "MQTT connected to {}:{}, subscribed to kuksa/+/telemetry/# and kuksa/+/ota/status",
+        "MQTT connected to {}:{}, subscribed to kuksa/+/telemetry/#",
         mqtt_host, mqtt_port
     );
 
     (client, eventloop)
 }
 
-/// Drive the MQTT event loop forever, dispatching telemetry and OTA messages.
+/// Drive the MQTT event loop forever, dispatching telemetry messages.
 pub async fn run(
     mut eventloop: EventLoop,
     store: Store,
     tx: broadcast::Sender<PositionEvent>,
-    campaigns: CampaignStore,
-    campaign_tx: broadcast::Sender<CampaignEvent>,
-    hawkbit: Arc<HawkbitClient>,
 ) {
     loop {
         match eventloop.poll().await {
@@ -87,20 +63,8 @@ pub async fn run(
                         continue;
                     }
                     let vin = parts[0];
-                    match parts[1] {
-                        "telemetry" => handle_signal(&store, &tx, vin, parts[2], payload),
-                        "ota" if parts[2] == "status" => {
-                            handle_ota_status(
-                                &store,
-                                &campaigns,
-                                &campaign_tx,
-                                hawkbit.clone(),
-                                vin,
-                                payload,
-                            )
-                            .await
-                        }
-                        _ => {}
+                    if parts[1] == "telemetry" {
+                        handle_signal(&store, &tx, vin, parts[2], payload);
                     }
                 }
             }
@@ -113,7 +77,7 @@ pub async fn run(
     }
 }
 
-// ── Telemetry (v1) ───────────────────────────────────────────────────────────
+// ── Telemetry ────────────────────────────────────────────────────────────────
 
 fn handle_signal(
     store: &Store,
@@ -171,99 +135,5 @@ fn handle_signal(
             }
         }
         _ => {}
-    }
-}
-
-// ── OTA status (v2) ──────────────────────────────────────────────────────────
-
-#[derive(Debug, Deserialize)]
-struct OtaStatus {
-    campaign_id: Uuid,
-    vin: String,
-    state: String,
-    #[serde(default)]
-    version: Option<String>,
-    #[serde(default)]
-    error: Option<String>,
-}
-
-async fn handle_ota_status(
-    store: &Store,
-    campaigns: &CampaignStore,
-    campaign_tx: &broadcast::Sender<CampaignEvent>,
-    hawkbit: Arc<HawkbitClient>,
-    vin: &str,
-    payload: String,
-) {
-    let status: OtaStatus = match serde_json::from_str(&payload) {
-        Ok(s) => s,
-        Err(e) => {
-            warn!("bad ota/status payload for {vin}: {e}");
-            return;
-        }
-    };
-
-    let state = match status.state.as_str() {
-        "PENDING" => VehicleUpdateState::Pending,
-        "DOWNLOADING" => VehicleUpdateState::Downloading,
-        "INSTALLING" => VehicleUpdateState::Installing,
-        "COMPLETE" => VehicleUpdateState::Complete {
-            version: status.version.clone().unwrap_or_default(),
-        },
-        "FAILED" => VehicleUpdateState::Failed {
-            error: status.error.clone().unwrap_or_else(|| "unknown".into()),
-        },
-        other => {
-            warn!("unknown ota state for {vin}: {other}");
-            return;
-        }
-    };
-
-    // Spec §4 / §7.3 say the DashMap should be updated *from the HawkBit
-    // response* after feedback, keeping a single write path. In practice the
-    // feedback endpoint returns no per-vehicle state body, so we update the
-    // store from the MQTT payload directly and rely on the 5 s `poll_rollouts`
-    // task in main.rs to reconcile against HawkBit if they ever diverge.
-    //
-    // Report terminal states back to HawkBit so it reflects reality without
-    // waiting for the 5s poll cycle. The deployment/action id isn't carried on
-    // the MQTT status payload yet; skip the feedback call if we can't match one.
-    if matches!(
-        state,
-        VehicleUpdateState::Complete { .. } | VehicleUpdateState::Failed { .. }
-    ) {
-        if let Err(e) = hawkbit.report_feedback(&status.vin, 0, true).await {
-            if e.is_unreachable() {
-                warn!(
-                    "hawkbit unreachable during feedback for {}: {}",
-                    status.vin, e
-                );
-            } else {
-                warn!("hawkbit feedback failed for {}: {}", status.vin, e);
-            }
-        }
-    }
-
-    // Update the campaign store.
-    if let Some(new_state) =
-        campaigns.set_vehicle_state(&status.campaign_id, &status.vin, state.clone())
-    {
-        // If the update completed successfully, also reflect the version in
-        // the fleet store so GET /fleet shows the new SoftwareVersion.
-        if let VehicleUpdateState::Complete { version } = &new_state {
-            let v = version.clone();
-            store.update_string(&status.vin, |r| r.software_version = v);
-        }
-
-        let _ = campaign_tx.send(CampaignEvent {
-            campaign_id: status.campaign_id,
-            vin: status.vin,
-            state: new_state,
-        });
-    } else {
-        debug!(
-            "received ota status for unknown campaign {} / vin {}",
-            status.campaign_id, status.vin
-        );
     }
 }

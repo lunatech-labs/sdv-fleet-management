@@ -1,7 +1,7 @@
-# Fleet Management Demo — v2 Specification
+# Fleet Management Demo, v2 Specification
 
-**Version:** 2.0 (draft)
-**Status:** In progress
+**Version:** 2.1
+**Status:** Implemented
 **Audience:** External clients and prospects
 **Builds on:** specs.md (v1)
 
@@ -11,7 +11,7 @@
 
 v2 extends the live fleet dashboard with OTA (over-the-air) software update campaigns powered by Eclipse HawkBit. An operator selects a set of vehicles and a target software version directly from the Vue dashboard, launches a campaign, and watches per-vehicle progress in real time. A configurable failure rate makes the demo resilient to the "happy path only" criticism and demonstrates rollback awareness.
 
-The existing v1 data pipeline (Kuksa → MQTT → Rust backend → browser) is unchanged. v2 adds a second flow alongside it: HawkBit (campaign store) ↔ Rust backend (OTA bridge) ↔ MQTT ↔ ota-agent (per-vehicle simulator).
+The existing v1 telemetry pipeline (Kuksa → MQTT → Rust backend → browser) is unchanged. v2 adds a second flow alongside it in which HawkBit is the authoritative source of OTA state: the Rust backend orchestrates campaigns through HawkBit's Management API, and each ota-agent talks directly to HawkBit's Direct Device Integration (DDI) API. MQTT is no longer on the OTA path; its only new role is to carry the retained gateway token that the backend provisions and publishes so agents can authenticate to DDI.
 
 ---
 
@@ -32,7 +32,7 @@ The existing v1 data pipeline (Kuksa → MQTT → Rust backend → browser) is u
 - TLS / authentication (demo environment only)
 - Rollback execution (failure is surfaced but recovery is manual)
 - More than 20 vehicles
-- Retry logic for offline ota-agents. If an agent is unreachable when a command is published, the vehicle remains in `PENDING` indefinitely. Operators must restart the affected container manually. This is a known demo limitation; `restart: on-failure` in docker-compose mitigates the common crash case.
+- Offline retry logic. `restart: on-failure` in docker-compose recovers crashed agents. HawkBit DDI polling tolerates transient HawkBit outages because every agent poll is stateless and the state machine only advances on a successful poll response.
 
 ---
 
@@ -42,143 +42,182 @@ The existing v1 data pipeline (Kuksa → MQTT → Rust backend → browser) is u
 
 ```
 Browser Dashboard
-    │  REST  POST /campaigns, GET /campaigns/{id}
-    │  REST  GET /versions
-    │  WS    /ws/campaigns  (live per-vehicle status)
-    │  REST  GET /fleet, GET /vehicles/{vin}        <- unchanged from v1
-    │  WS    /ws/fleet                              <- unchanged from v1
+    │  REST  POST /campaigns, GET /campaigns/{id}, GET /versions
+    │  WS    /ws/campaigns                          (live per-vehicle status)
+    │  REST  GET /fleet, GET /vehicles/{vin}        (unchanged from v1)
+    │  WS    /ws/fleet                              (unchanged from v1)
     v
 Rust Backend (axum)
-    │  HawkBit Management API  <- register targets, create rollouts, report status
-    │  MQTT publish  kuksa/{vin}/ota/command
-    │  MQTT subscribe  kuksa/{vin}/ota/status       <- new subscription
-    │  MQTT subscribe  kuksa/+/telemetry/#          <- unchanged from v1
+    │  HawkBit Management API (HTTP Basic admin:admin)
+    │     * provision gateway token in tenant config
+    │     * seed distribution sets + software modules
+    │     * create rollouts
+    │     * poll target actions + action-status history every 3 s
+    │     * hydrate campaign store from rollouts on startup
+    │  MQTT publish  fleet/gateway-token            (retained, on startup)
+    │  MQTT subscribe  kuksa/+/telemetry/#          (unchanged from v1)
     v
 Eclipse Mosquitto (unchanged)
-    ^  kuksa/{vin}/ota/status  (ota-agent -> backend)
-    v  kuksa/{vin}/ota/command (backend -> ota-agent)
+    v  fleet/gateway-token  backend -> ota-agents (retained, QoS 1)
     │
-┌───────────────────────────────────────────────────────┐
-│  Vehicle fleet — 20 instances                         │
-│                                                       │
-│  ┌──────────────┐  ┌──────────────┐  ┌─────────────┐  │
-│  │   Kuksa      │  │ kuksa2mqtt   │  │  ota-agent  │  │
-│  │ Databroker   │<>│  sidecar     │  │  (new)      │  │
-│  │ (gRPC)       │  │              │  │             │  │
-│  └──────────────┘  └──────────────┘  └─────────────┘  │
-│         × 20 vehicles (60 containers total)           │
-└───────────────────────────────────────────────────────┘
-
-Eclipse HawkBit (new)
-    │  stores: targets (vehicles), distribution sets (versions), rollouts (campaigns)
-    <- Management API calls from Rust backend
+┌───────────────────────────────────────────────────────────────┐
+│  Vehicle fleet, 20 instances                                  │
+│                                                               │
+│  ┌──────────────┐  ┌──────────────┐  ┌─────────────────────┐  │
+│  │   Kuksa      │  │ kuksa2mqtt   │  │  ota-agent          │  │
+│  │ Databroker   │<>│  sidecar     │  │                     │  │
+│  │ (gRPC)       │  │              │  │                     │  │
+│  └──────────────┘  └──────────────┘  └─────────────────────┘  │
+│         × 20 vehicles (60 containers total)                   │
+└───────────────────────────────────────────────────────────────┘
+                                                  │
+                                                  │  HawkBit DDI API
+                                                  │  Authorization: GatewayToken <uuid>
+                                                  │    * GET /DEFAULT/controller/v1/{vin}
+                                                  │      (self-register on first call,
+                                                  │       discover pending deployment)
+                                                  │    * GET .../deploymentBase/{id}
+                                                  │    * POST .../deploymentBase/{id}/feedback
+                                                  │    * POST .../cancelAction/{id}/feedback
+                                                  v
+Eclipse HawkBit (Spring Boot, Postgres-backed)
+    stores: targets (VINs), distribution sets, software modules, rollouts,
+            actions and action-status history
 ```
+
+**Three key shifts from the earlier v2 draft:**
+
+1. **HawkBit is now authoritative.** The backend's in-memory `CampaignStore` is a projection of HawkBit state. On startup it hydrates from HawkBit rollouts; during runtime it reconciles every 3 s from each target's action status. The backend never writes OTA state without first having read it from HawkBit.
+2. **ota-agents use the DDI API directly** with a gateway token. MQTT no longer carries OTA commands or status. This matches HawkBit's intended device-provisioning workflow.
+3. **Target self-registration.** The backend no longer pre-registers targets. Each ota-agent's first DDI poll authenticates with the gateway token and HawkBit auto-creates the target under `CONTROLLER_PLUG_AND_PLAY`.
 
 ### 3.2 HawkBit concepts mapped to this demo
 
 | HawkBit concept | Demo mapping |
 |---|---|
-| Target | One vehicle (keyed by VIN) |
-| Distribution Set | A named software version (e.g. `fleet-fw:2.0.0`) |
-| Rollout | One campaign (covers N vehicles) |
-| Deployment | Per-vehicle assignment within a rollout |
+| Target | One vehicle (keyed by VIN). Auto-created by HawkBit on first DDI contact. |
+| Software Module | An `os` module seeded per version. Required by HawkBit for a distribution set of type `os` to be "complete". |
+| Distribution Set | A named software version (e.g. `fleet-fw:2.0.0`) with an attached `os` module. |
+| Rollout | One campaign (covers N vehicles). Named `campaign-<uuid>` so the backend can round-trip the campaign id on hydration. |
+| Action | HawkBit's per-target deployment record. `action.status` and the latest status-history entry's `messages` drive the backend's `VehicleUpdateState`. |
 
 ### 3.3 Port allocation (additions)
 
 | Service | Host port |
 |---|---|
 | Eclipse HawkBit | 8083 |
+| Postgres (HawkBit backend store) | not exposed (internal only) |
 | All v1 services | unchanged |
 
 ---
 
-## 4. New component: Eclipse HawkBit
+## 4. New components: Eclipse HawkBit and Postgres
 
-HawkBit runs as a single Docker container using its standalone Spring Boot image with an H2 in-memory database (sufficient for demo use).
+HawkBit runs as a single Docker container using the `hawkbit-update-server:0.3.0M7` image, backed by a Postgres container. The image is pinned because `latest` ships an H2 JDBC driver that has dropped `CALL IDENTITY()` support. A dedicated `postgres:16-alpine` service replaces the H2 in-memory DB.
 
-> **Note:** The H2 in-memory database means a HawkBit container restart loses all campaign history. This is expected behaviour in the demo environment.
+> **Note on persistence:** the Postgres container has no volume mounted, so a `docker compose down` still wipes all campaign history. This is intentional for demo reproducibility. The container's own lifecycle survives `docker compose restart` without data loss, and that is enough for the backend's campaign hydration to recover state across restarts.
 
 **Responsibilities:**
-- Persist vehicle targets (registered by the backend at startup)
-- Persist distribution sets (software versions available to deploy, seeded at startup)
-- Persist rollouts and track per-deployment status
-- Expose the Management API consumed by the Rust backend
+- Persist targets (auto-created on first DDI contact from each ota-agent).
+- Persist software modules and distribution sets (seeded by the backend at startup).
+- Persist rollouts and per-target actions, including the full action-status history.
+- Expose the Management API consumed by the Rust backend.
+- Expose the DDI API consumed by ota-agents.
 
 **Configuration:**
-- Authentication: static bearer token set via `HAWKBIT_TOKEN` env var, shared between the HawkBit container and the backend. Fully disabled auth is avoided even in the demo environment to prevent accidental exposure if the compose stack is run on a non-loopback interface.
-- Database: H2 in-memory (no separate DB container needed)
-- Port: 8083
+- **Management API authentication:** HTTP Basic. Credentials are driven from `HAWKBIT_USER` / `HAWKBIT_PASSWORD` in `.env`, default `admin:admin`. The same pair is injected into the HawkBit container via `HAWKBIT_SERVER_IM_USERS_0_*` Spring env vars with a `{noop}` password prefix so the backend and HawkBit cannot drift.
+- **DDI authentication:** gateway-token, provisioned dynamically by the backend on startup. The backend PUTs `authentication.gatewaytoken.enabled=true` and, if the tenant does not already have a key, a freshly generated UUID into `authentication.gatewaytoken.key`. This value is then broadcast to all ota-agents as a retained MQTT message (see §6).
+- **Database:** Postgres. Both the DB and HawkBit bind user/password to `hawkbit:hawkbit` (internal only, not exposed on the host).
+- **Healthcheck:** `wget --spider http://localhost:8080/UI/login`. The `/actuator/health` path returns 404 on this HawkBit version; `/UI/login` returns 200 as soon as the embedded Tomcat is ready.
+- **Port:** 8083 (mapped to HawkBit's internal 8080).
 
-**Backend interactions:**
-1. On startup: `PUT /rest/v1/targets/{vin}` for each of the 20 vehicles
-2. On startup: seed three distribution sets (`1.5.0`, `2.0.0`, `2.1.0-beta`) if not already present
-3. On `POST /campaigns`: create a Rollout targeting selected VINs against an existing Distribution Set
-4. Background poll every 5 seconds: reconcile per-vehicle deployment state into the in-memory DashMap
-5. On MQTT status received: `POST /rest/v1/targets/{vin}/deployments/{id}/feedback` to mark complete/failed in HawkBit, then update the DashMap from the HawkBit response
+**Backend interactions at startup:**
+1. Provision the gateway token (`PUT /rest/v1/system/configs/authentication.gatewaytoken.{enabled,key}`).
+2. Seed three distribution sets (`1.5.0`, `2.0.0`, `2.1.0-beta`) and, for each, an `os`-type software module attached via `POST .../distributionsets/{id}/assignedSM`. A distribution set of type `os` without an attached module is rejected by the rollout creation endpoint as "incomplete".
+3. Hydrate the `CampaignStore`: list all rollouts, parse `campaign-<uuid>` names, resolve each rollout's target VINs and distribution-set version, and insert a placeholder `Campaign` with every vehicle in `PENDING`. The reconcile loop fills in real states on its next tick.
 
-HawkBit is the authoritative state store. The DashMap is always updated from HawkBit responses, not directly from raw MQTT payloads, keeping a single write path and preventing divergence.
+**Backend interactions at runtime:**
+- On `POST /campaigns`: create a rollout via `POST /rest/v1/rollouts`, wait for HawkBit to promote it from `creating` to `ready` (short polling loop), then start it with `POST /rest/v1/rollouts/{id}/start`.
+- Every 3 seconds, for each non-terminal vehicle in each campaign: `GET /rest/v1/targets/{vin}/actions` to find the action matching the campaign's rollout id, then `GET .../actions/{id}/status?sort=id:DESC&limit=1` to read the latest status-history entry. The `action.status` plus the entry's `messages[0]` are mapped to the `VehicleUpdateState`. Terminal states are never downgraded.
+
+HawkBit is the single source of truth. The backend's in-memory `CampaignStore` is a cache. No write to the store happens without a read from HawkBit having produced it, which keeps the data path cycle-free.
 
 ---
 
 ## 5. New component: ota-agent
 
-A new Rust binary (`ota-agent/`) running as a separate container per vehicle. It is the simulated ECU update client.
+A Rust binary (`ota-agent/`) running as a separate container per vehicle. It is the simulated ECU update client. In v2 as shipped, the agent talks to HawkBit's DDI API over HTTP and to its local Kuksa Databroker over gRPC. Its MQTT role is minimal: it subscribes to one retained topic to learn the gateway token, then proceeds entirely over HTTP.
 
-**Responsibilities:**
-- Subscribe to `kuksa/{vin}/ota/command`
-- On command received: run the simulated update state machine
-- Publish state transitions to `kuksa/{vin}/ota/status`
-- On `COMPLETE`: write the new version string to `Vehicle.SoftwareVersion` in the local Databroker via gRPC
+**Bootstrap flow:**
 
-**State machine:**
+1. Connect to MQTT and subscribe to `fleet/gateway-token` (retained, QoS 1).
+2. On receiving the token, start the DDI poll loop. Subsequent retained-message redeliveries are ignored.
+3. The very first DDI poll both self-registers the target (HawkBit auto-creates it) and proves the token works. No explicit registration call is made.
+
+**DDI poll loop (every `DDI_POLL_SECS`, default 3 s):**
 
 ```
-PENDING -> DOWNLOADING (delay: DOWNLOAD_DELAY_SECS) -> INSTALLING (delay: INSTALL_DELAY_SECS)
-                                                     -> COMPLETE  (probability: 1 - FAILURE_RATE)
-                                                     -> FAILED    (probability: FAILURE_RATE)
+GET /DEFAULT/controller/v1/{vin}   Authorization: GatewayToken <token>
+│
+├── _links.cancelAction present      -> POST .../cancelAction/{id}/feedback
+│                                        execution=closed, finished=success
+│                                        (HawkBit won't dispatch new deployments
+│                                         while a cancel is outstanding)
+│
+├── _links.deploymentBase present    -> spawn state machine for that action id
+│                                        (skip if already in-flight)
+│
+└── nothing                         -> sleep, poll again
 ```
+
+**State machine (per deployment action):**
+
+```
+GET  .../deploymentBase/{id}                                     # fetch target version
+POST .../deploymentBase/{id}/feedback execution=proceeding       # message: "DOWNLOADING"
+sleep DOWNLOAD_DELAY_SECS
+POST .../deploymentBase/{id}/feedback execution=proceeding       # message: "INSTALLING"
+sleep INSTALL_DELAY_SECS
+roll FAILURE_RATE:
+  success:
+    gRPC Set Vehicle.SoftwareVersion = <version> on local databroker
+    POST .../deploymentBase/{id}/feedback execution=closed, finished=success
+  failure:
+    POST .../deploymentBase/{id}/feedback execution=closed, finished=failure
+                                                                 # message: "simulated failure"
+```
+
+The `DOWNLOADING` / `INSTALLING` / `simulated failure` strings in the feedback `details[]` array are what the backend parses out of the action-status history to distinguish DOWNLOADING from INSTALLING inside HawkBit's single `running` status and to surface the failure reason.
 
 **Environment variables:**
 
 | Variable | Default | Description |
 |---|---|---|
 | `VEHICLE_VIN` | required | VIN this agent manages |
-| `MQTT_HOST` | `mosquitto` | MQTT broker hostname |
+| `MQTT_HOST` | `mosquitto` | MQTT broker hostname (gateway-token delivery only) |
 | `KUKSA_HOST` | required | Local Databroker hostname |
 | `KUKSA_PORT` | `55555` | Local Databroker gRPC port |
-| `FAILURE_RATE` | `0.2` | Probability (0.0–1.0) that an install fails |
+| `HAWKBIT_URL` | `http://hawkbit:8080` | HawkBit base URL for DDI calls |
+| `FAILURE_RATE` | `0.2` | Probability (0.0 to 1.0) that an install fails |
 | `DOWNLOAD_DELAY_SECS` | `5` | Simulated download duration |
 | `INSTALL_DELAY_SECS` | `3` | Simulated install duration |
+| `DDI_POLL_SECS` | `3` | DDI poll interval (overrides HawkBit's suggested cadence) |
 
-**MQTT message formats:**
-
-Command (backend → ota-agent):
-```json
-{ "campaign_id": "uuid", "version": "2.0.0" }
-```
-
-Status (ota-agent → backend):
-```json
-{ "campaign_id": "uuid", "vin": "VIN-0001", "state": "DOWNLOADING" }
-{ "campaign_id": "uuid", "vin": "VIN-0001", "state": "INSTALLING" }
-{ "campaign_id": "uuid", "vin": "VIN-0001", "state": "COMPLETE", "version": "2.0.0" }
-{ "campaign_id": "uuid", "vin": "VIN-0001", "state": "FAILED", "error": "simulated failure" }
-```
+No `HAWKBIT_TOKEN` env var is needed on the agent: the token is received over MQTT at runtime, which lets an admin rotate it without restarting every agent container.
 
 ---
 
 ## 6. MQTT topic additions
 
-The two reserved topics from v1 are now active:
+Only one new topic is added in v2:
 
 ```
-kuksa/{vin}/ota/command    backend -> ota-agent   (new, QoS 1)
-kuksa/{vin}/ota/status     ota-agent -> backend   (new, QoS 1)
+fleet/gateway-token     backend -> ota-agents    (retained, QoS 1)
 ```
 
-The backend subscribes to `kuksa/+/ota/status` with a single wildcard, mirroring the `kuksa/+/telemetry/#` pattern already in use.
+The `kuksa/{vin}/ota/command` and `kuksa/{vin}/ota/status` topics from the earlier draft are not used. OTA dispatch and feedback travel over HawkBit's DDI API, not MQTT.
 
-**Known limitation:** commands are published at QoS 1 but are not retained. If an ota-agent is not connected when the command is published, the message is lost and the vehicle remains in `PENDING` indefinitely. Recovery requires manually restarting the affected container. The `restart: on-failure` compose policy mitigates the crash case but does not handle a clean startup race.
+The retained flag is load-bearing. Agents can start before the backend, or the backend can restart, without losing the token: the broker re-delivers the retained message to each new subscriber. If an admin rotates the token (by wiping HawkBit's tenant config), a backend restart re-provisions a new token and republishes, overwriting the retained message.
 
 ---
 
@@ -186,43 +225,97 @@ The backend subscribes to `kuksa/+/ota/status` with a single wildcard, mirroring
 
 ### 7.1 New module: `hawkbit.rs`
 
-HawkBit Management API client. This module is the single point of write authority for deployment state.
+HawkBit Management API client. Exposes only read + orchestration operations; there is no Management-API feedback path (feedback lives on DDI).
 
 Responsibilities:
-- Register all 20 vehicles as targets on startup
-- Seed distribution sets for `1.5.0`, `2.0.0`, `2.1.0-beta` on startup if not present
-- `create_distribution_set(name, version) -> DistributionSetId`
-- `create_rollout(dist_id, vins) -> RolloutId`
-- `report_deployment_result(vin, deployment_id, success)` — called immediately on MQTT status receipt
-- `poll_rollout_status(rollout_id) -> Vec<(Vin, DeploymentState)>` — called by a background task every 5 seconds; results are diffed against the DashMap and any transitions are broadcast on `/ws/campaigns`
+- **Gateway-token provisioning:** `enable_gateway_token()` PUTs `authentication.gatewaytoken.enabled=true` and a freshly generated UUID into `authentication.gatewaytoken.key` if the tenant doesn't already have one. Idempotent.
+- **Distribution set + software module seeding:** `ensure_distribution_set(name, version)` creates the DS if missing and attaches a matching `os` software module so HawkBit marks it complete.
+- **Rollout creation:** `create_rollout(name, ds_id, vins)` posts the rollout, polls its status for up to 5 s until it reaches `ready`, then starts it.
+- **Action readback:** `list_target_actions(vin)` and `latest_action_status(vin, action_id)` feed the reconciliation loop in `main.rs`.
+- **Hydration readback:** `list_rollouts()`, `distribution_set_version(ds_id)`, `rollout_target_vins(rollout_id)` feed the startup hydrator.
+
+Notably absent:
+- No `register_target(vin)`. Targets self-register through DDI.
+- No `report_feedback(...)`. Feedback is a DDI operation, not a Management API one.
+- No `poll_rollout(rollout_id) -> per-VIN state`. The reconciliation path is per-target via `list_target_actions` so that terminal states on a per-vehicle basis are easy to short-circuit.
 
 ### 7.2 New module: `campaign.rs`
 
-In-memory campaign state store (`DashMap<CampaignId, Campaign>`). Always written from HawkBit poll results or HawkBit feedback responses, never directly from raw MQTT payloads.
+In-memory `CampaignStore` backed by `Arc<DashMap<CampaignId, Campaign>>`. Source of truth for the dashboard WS; projection of HawkBit for the write path.
 
 ```rust
-struct Campaign {
-    id:       Uuid,
-    version:  String,
-    vehicles: HashMap<String, VehicleUpdateState>,
-    created:  DateTime<Utc>,
+pub struct Campaign {
+    pub id:          Uuid,
+    pub version:     String,
+    pub vehicles:    HashMap<String, VehicleUpdateState>,
+    pub created:     DateTime<Utc>,
+    pub rollout_id:  Option<u64>,   // link back to HawkBit for reconciliation
 }
 
-enum VehicleUpdateState {
+pub enum VehicleUpdateState {
     Pending,
     Downloading,
     Installing,
     Complete { version: String },
-    Failed { error: String },
+    Failed   { error: String },
 }
 ```
 
+`set_vehicle_state(campaign_id, vin, state)` is the only mutation method. It is called from exactly one place: the `poll_campaign_state` task in `main.rs`.
+
 ### 7.3 Updated module: `mqtt.rs`
 
-- Add subscription to `kuksa/+/ota/status`
-- On status message: call `hawkbit.rs` to report result, then update `campaign.rs` store from the HawkBit response, then broadcast the transition on `/ws/campaigns`
+The backend's MQTT role is now limited to telemetry plus the one-shot gateway-token announcement.
 
-### 7.4 New REST endpoints
+- Subscriptions: `kuksa/+/telemetry/#` only.
+- `publish_gateway_token(client, token)` posts a retained QoS 1 message to `fleet/gateway-token` at startup.
+- No OTA command publish, no OTA status subscription, no `handle_ota_status` path.
+
+### 7.4 New task in `main.rs`: `poll_campaign_state`
+
+A background task that runs every 3 s and reconciles every non-terminal vehicle in every active campaign against HawkBit.
+
+Pseudocode:
+
+```rust
+for campaign in campaigns.all() {
+    let rollout_id = campaign.rollout_id?;
+    for (vin, prev) in &campaign.vehicles {
+        if is_terminal(prev) { continue; }               // Complete / Failed are sticky
+        let action = hawkbit
+            .list_target_actions(vin).await?
+            .into_iter().find(|a| a.rollout == Some(rollout_id))?;
+        let new_state = match action.status {
+            "finished"         => Complete { version: campaign.version.clone() },
+            "error" | "canceled" => Failed { error: latest_message_or("update failed") },
+            "running"          => match latest_message(vin, action.id).await {
+                starts_with("INSTALLING") => Installing,
+                starts_with("DOWNLOADING") => Downloading,
+                _                          => Pending,     // just the initial "Initiated by Rollout..."
+            },
+            _                  => Pending,
+        };
+        if discriminant(prev) != discriminant(new_state) {
+            campaigns.set_vehicle_state(&campaign.id, vin, new_state);
+            campaign_tx.send(CampaignEvent { campaign_id, vin, state });
+        }
+    }
+}
+```
+
+### 7.5 New helper in `main.rs`: `hydrate_campaigns`
+
+On startup, after distribution sets are seeded, the backend rebuilds the `CampaignStore` from HawkBit so restarts don't drop campaign history:
+
+1. `list_rollouts()` from HawkBit.
+2. For each rollout whose name starts with `campaign-<uuid>`, parse the UUID.
+3. Look up the distribution-set version via `distribution_set_version(ds_id)`.
+4. Enumerate target VINs via `rollout_target_vins(rollout_id)`.
+5. Insert a `Campaign` with every vehicle in `Pending` and the rollout id attached.
+
+The first `poll_campaign_state` tick (3 s after startup) then promotes those vehicles to their real state. This two-phase approach keeps hydration simple (no per-vehicle HTTP fan-out at startup) while still converging within a few seconds.
+
+### 7.6 New REST endpoints
 
 | Method | Path | Description |
 |---|---|---|
@@ -264,91 +357,113 @@ Error body: `{ "error": "<human-readable message>" }`
 { "versions": ["1.5.0", "2.0.0", "2.1.0-beta"] }
 ```
 
-Proxies `GET /rest/v1/distributionsets` from HawkBit and returns version strings.
+Proxies HawkBit's distribution-set listing and returns version strings.
 
 **`/ws/campaigns` WebSocket protocol:**
 
-On connect, the backend immediately sends a full snapshot of all current campaign states. Subsequent messages are individual transition events. This ensures clients connecting mid-campaign have consistent state without a separate REST call.
+On connect, the backend immediately sends a full snapshot of all current campaign states. Subsequent messages are individual per-vehicle transition events driven by the `poll_campaign_state` reconciliation loop. This guarantees mid-campaign clients have consistent state without a separate REST call.
 
 ```json
 // Sent once on connect
 { "type": "snapshot", "campaigns": { "<campaign_id>": { } } }
 
-// Sent on each state transition
+// Sent on each per-vehicle state transition
 { "type": "transition", "campaign_id": "uuid", "vin": "VIN-0001", "state": "INSTALLING" }
 ```
 
-### 7.5 Updated data model
+Campaign creation is not currently broadcast over the WS. The frontend merges the `POST /campaigns` response into its local reactive map so the creating tab gets the card immediately. Other already-open tabs see it on their next reconnect snapshot. Fixing this to broadcast a `Created` event would require promoting `CampaignEvent` from a struct to an enum, which is left as a small follow-up.
 
-`VehicleRecord.software_version` is already present and static in v1. After a successful OTA, the backend updates this field in the `DashMap` so `GET /fleet` and `GET /vehicles/{vin}` reflect the new version immediately without a restart.
+### 7.7 Updated data model
 
-### 7.6 New crates
+`VehicleRecord.software_version` is already present and static in v1. On a successful OTA, the ota-agent writes the new version to its local Kuksa Databroker via gRPC. The kuksa2mqtt sidecar no longer streams this attribute to the backend in v2 (it was only ever a static seed signal), so the backend does not auto-update `VehicleRecord.software_version` from telemetry. If the frontend needs the new version displayed immediately, it should read it from the matching `Campaign.vehicles[vin]` entry when the state reaches `Complete { version: ... }`. The current Vue drawer does this.
+
+### 7.8 New crates
 
 | Crate | Role |
 |---|---|
-| `reqwest` | HTTP client for HawkBit Management API calls |
-| `uuid` | Campaign and deployment ID generation |
+| `reqwest` | HTTP client for HawkBit Management API and DDI (also pulled in by ota-agent with `default-features = false` + `rustls-tls` to keep the Docker builder free of OpenSSL) |
+| `uuid` | Campaign id and gateway token generation |
 
 ---
 
 ## 8. Frontend changes
 
-### 8.1 New view: Campaign panel
+### 8.1 New panel: `CampaignPanel.vue`
 
-A new tab alongside the map with two sub-sections:
+Opens as a second right-side drawer next to the existing `FleetTable`, toggled from the map via a separate icon button. Two sub-sections:
 
 **Campaign launcher:**
-- Version selector — dropdown populated by `GET /versions` on mount
-- Vehicle selector — checkboxes for all 20 vehicles (pre-select all by default)
-- Launch button — calls `POST /campaigns`
+- Version selector populated by `GET /versions` on mount.
+- VIN checkboxes for every known vehicle, pre-checked by default.
+- Launch button calling `POST /campaigns`. On success the created campaign is emitted upward and merged into the composable's reactive map immediately so the new card appears without waiting for a WS reconnect.
 
 **Active campaigns list:**
-- One card per campaign: target version, launch time, aggregate progress bar (X / N complete)
-- Per-vehicle state chips inside each card, updated live via WebSocket
+- One card per campaign: target version, launch time, per-vehicle state chips updated live via `/ws/campaigns`.
 
-### 8.2 Updated view: Vehicle detail drawer
+### 8.2 Updated view: `VehicleDrawer.vue`
 
-- `software_version` already displayed in v1; remains the same field
-- New: active update state badge if the vehicle is part of a running campaign (e.g. "Installing 2.0.0...")
-- Version field updates to the new version on `COMPLETE`
+- `software_version` from v1 still displayed.
+- New "Update" row shown when the vehicle is part of an active campaign. Displays a colour-coded chip reflecting the latest `VehicleUpdateState` from the reactive `campaigns` map.
 
 ### 8.3 New composable: `useCampaignSocket.ts`
 
-Mirrors `useFleetSocket.ts`. Opens `/ws/campaigns` and waits for the initial `snapshot` message to hydrate the reactive `Map<campaignId, Campaign>`. Subsequent `transition` messages are merged in by `(campaignId, vin)` key. If the socket drops and reconnects, the snapshot message re-hydrates state cleanly without requiring a page reload. No separate `GET /campaigns/{id}` call is needed on connect.
+Mirrors `useFleetSocket.ts`. Opens `/ws/campaigns`; on `snapshot` it replaces the reactive `Record<campaignId, Campaign>`; on `transition` it merges into the matching campaign's `vehicles[vin]` entry. Reconnects with exponential backoff.
 
-### 8.4 New component: `CampaignPanel.vue`
+### 8.4 New types
 
-Campaign creation form + live status grid. Consumes `useCampaignSocket`.
+`frontend/src/types.ts` gains `VehicleUpdateState`, `Campaign`, and a `WsCampaignMessage` discriminated union mirroring the Rust enum shapes.
 
 ---
 
 ## 9. docker-compose additions
 
 ```yaml
-# build + image together: BuildKit deduplicates the build across all 20 agents
-# and tags the result as ota-agent:local, mirroring the kuksa2mqtt pattern.
 x-ota-agent-defaults: &ota-agent-defaults
   build: ./ota-agent
   image: ota-agent:local
   depends_on:
     mosquitto:
       condition: service_healthy
+    hawkbit:
+      condition: service_healthy   # self-registration requires DDI reachable
   restart: on-failure
 
 services:
 
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       hawkbit
+      POSTGRES_USER:     hawkbit
+      POSTGRES_PASSWORD: hawkbit
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hawkbit -d hawkbit"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   hawkbit:
-    image: hawkbit/hawkbit-update-server:latest
+    image: hawkbit/hawkbit-update-server:0.3.0M7
     ports:
       - "8083:8080"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:h2:mem:hawkbit
-      HAWKBIT_TOKEN: ${HAWKBIT_TOKEN}
+      SPRING_DATASOURCE_URL:               jdbc:postgresql://postgres:5432/hawkbit
+      SPRING_DATASOURCE_USERNAME:          hawkbit
+      SPRING_DATASOURCE_PASSWORD:          hawkbit
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+      SPRING_JPA_DATABASE:                 POSTGRESQL
+      HAWKBIT_SERVER_IM_USERS_0_USERNAME:    ${HAWKBIT_USER:-admin}
+      HAWKBIT_SERVER_IM_USERS_0_PASSWORD:    "{noop}${HAWKBIT_PASSWORD:-admin}"
+      HAWKBIT_SERVER_IM_USERS_0_PERMISSIONS: ALL
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/management/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/UI/login"]
       interval: 10s
       timeout: 5s
       retries: 10
+      start_period: 60s
 
   ota-agent-01:
     <<: *ota-agent-defaults
@@ -362,32 +477,46 @@ services:
   # × 20
 ```
 
-`ota-agent` follows the same `build` + `image` extension-field pattern as `kuksa2mqtt`. Declaring both keys together causes BuildKit to build the image once and tag it as `ota-agent:local`, which is then reused across all 20 instances without redundant builds or a Docker Hub pull. Both Dockerfiles use BuildKit-native cache mounts (`--mount=type=cache,target=/usr/local/cargo/registry` and `--mount=type=cache,target=/app/target`) to avoid re-downloading and re-compiling crates on every build. BuildKit is activated at the CLI level with `DOCKER_BUILDKIT=1` (or `COMPOSE_DOCKER_CLI_BUILD=1` for older compose versions) — the repo `README` should document this as a build prerequisite, consistent with the existing `kuksa2mqtt` note.
+`ota-agent` follows the same `build` + `image` extension-field pattern as `kuksa2mqtt`. Declaring both keys together causes BuildKit to build the image once and tag it as `ota-agent:local`, which is then reused across all 20 instances without redundant builds or a Docker Hub pull. Both Dockerfiles use BuildKit-native cache mounts to avoid re-downloading and re-compiling crates on every build.
 
-The backend service gains `hawkbit: { condition: service_healthy }` in its `depends_on` and `HAWKBIT_TOKEN: ${HAWKBIT_TOKEN}` in its environment.
+**Backend service additions:**
+- `depends_on: hawkbit: { condition: service_healthy }` so the backend only boots once HawkBit is ready to accept Management API calls.
+- Env: `HAWKBIT_URL`, `HAWKBIT_USER`, `HAWKBIT_PASSWORD`, driven from `.env` so the backend and HawkBit never disagree on the admin credentials.
 
-A `.env` file at the repo root supplies `HAWKBIT_TOKEN` for local runs. The value is arbitrary for the demo but must match in both services.
+**`.env.example` at the repo root** supplies:
+- `HAWKBIT_USER`, `HAWKBIT_PASSWORD` for the Management API (default `admin`/`admin`).
+- `HAWKBIT_TOKEN` is documented in the example file but is not actually used now that the backend provisions the DDI gateway token dynamically. The variable is kept only so operators who deliberately want to pin a fixed token can PUT it into the tenant config out of band.
 
 ---
 
 ## 10. Repository structure additions
 
 ```
-fleet-demo/
-├── ota-agent/                   <- new
-│   ├── Dockerfile               # BuildKit-native; mirrors kuksa2mqtt/Dockerfile exactly
-│   ├── Cargo.toml
+sdv-fleet-management/
+├── ota-agent/                   (new)
+│   ├── Dockerfile               # BuildKit-native; mirrors kuksa2mqtt/Dockerfile
+│   ├── Cargo.toml               # reqwest + rustls-tls (no openssl / pkg-config)
 │   └── src/
-│       └── main.rs              # MQTT subscriber + state machine + gRPC writer
+│       └── main.rs              # MQTT gateway-token listener
+│                                #   + DDI poll loop
+│                                #   + per-deployment state machine
+│                                #   + cancel-action handling
+│                                #   + gRPC Databroker writer on COMPLETE
 ├── backend/
 │   └── src/
-│       ├── hawkbit.rs           <- new
-│       ├── campaign.rs          <- new
-│       └── mqtt.rs              <- updated (ota/status subscription + publish)
+│       ├── hawkbit.rs           (new; Management API client)
+│       ├── campaign.rs          (new; in-memory CampaignStore)
+│       ├── mqtt.rs              (updated: telemetry + retained gateway-token)
+│       ├── api/campaigns.rs     (new; REST + WS handlers)
+│       └── main.rs              (updated: poll_campaign_state +
+│                                 hydrate_campaigns tasks)
 └── frontend/
     └── src/
-        ├── CampaignPanel.vue    <- new
-        └── useCampaignSocket.ts <- new
+        ├── CampaignPanel.vue    (new)
+        ├── VehicleDrawer.vue    (updated; update-state chip)
+        ├── App.vue              (updated; campaign-panel toggle)
+        ├── types.ts             (updated; Campaign/VehicleUpdateState)
+        └── useCampaignSocket.ts (new)
 ```
 
 ---
@@ -396,6 +525,13 @@ fleet-demo/
 
 All previous open decisions are resolved:
 
-- **Available versions list** — resolved: `GET /versions` endpoint backed by HawkBit distribution sets seeded at startup (`1.5.0`, `2.0.0`, `2.1.0-beta`). Frontend version selector calls this on mount.
-- **Campaign broadcast granularity** — resolved: snapshot on connect, then individual transitions. See section 7.4 for the full WebSocket protocol.
-- **HawkBit authentication** — resolved: static bearer token via `HAWKBIT_TOKEN` env var shared between the backend and HawkBit. Fully disabled auth is not used even in the demo environment.
+- **Available versions list.** Resolved: `GET /versions` endpoint backed by HawkBit distribution sets seeded at startup (`1.5.0`, `2.0.0`, `2.1.0-beta`). Frontend version selector calls this on mount.
+- **Campaign broadcast granularity.** Resolved: snapshot on connect, then individual per-vehicle transitions. See §7.6 for the full WebSocket protocol. Campaign-creation events are not yet on the WS; the creating tab merges locally from the POST response (see §7.6 for the follow-up).
+- **HawkBit authentication.** Resolved in two pieces:
+  - *Management API* uses HTTP Basic, with credentials driven from `.env` into both the backend and the HawkBit container so they cannot drift.
+  - *DDI API* uses a gateway token. The backend provisions it at startup via `PUT /rest/v1/system/configs/authentication.gatewaytoken.*`, then broadcasts it to ota-agents as a retained MQTT message. No static token in the demo environment.
+
+**New non-blocking follow-ups identified during implementation:**
+
+- Broadcast campaign-creation events on `/ws/campaigns` so that all open tabs see new campaigns without waiting for a reconnect (requires converting `CampaignEvent` from struct to enum).
+- Extend rollback UX: `VehicleUpdateState::Failed` is visible in the dashboard but no retry action is wired up.

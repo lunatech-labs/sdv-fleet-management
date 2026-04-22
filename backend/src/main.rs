@@ -4,8 +4,8 @@ use axum::{
     routing::{get, post},
     Router,
 };
-use chrono::Utc;
-use rumqttc::AsyncClient;
+use chrono::{DateTime, Utc};
+use uuid::Uuid;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 use tracing::{info, warn};
@@ -34,7 +34,6 @@ pub struct AppState {
     pub campaigns: CampaignStore,
     pub campaign_tx: broadcast::Sender<CampaignEvent>,
     pub hawkbit: Arc<HawkbitClient>,
-    pub mqtt_client: AsyncClient,
 }
 
 // ── OpenAPI doc ───────────────────────────────────────────────────────────────
@@ -114,7 +113,8 @@ async fn main() {
     let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".into());
 
     let hawkbit_url = env::var("HAWKBIT_URL").unwrap_or_else(|_| "http://hawkbit:8080".into());
-    let hawkbit_token = env::var("HAWKBIT_TOKEN").unwrap_or_else(|_| "demo".into());
+    let hawkbit_user = env::var("HAWKBIT_USER").unwrap_or_else(|_| "admin".into());
+    let hawkbit_password = env::var("HAWKBIT_PASSWORD").unwrap_or_else(|_| "admin".into());
 
     // ── Pre-populate store from vehicles.json ─────────────────────────────────
     let store = Store::new();
@@ -124,7 +124,6 @@ async fn main() {
     )
     .expect("vehicles.json is not valid JSON");
 
-    let vins: Vec<String> = seeds.iter().map(|s| s.vin.clone()).collect();
     for s in seeds {
         store.insert(VehicleRecord {
             vin: s.vin,
@@ -143,14 +142,34 @@ async fn main() {
     let (campaign_tx, _) = broadcast::channel::<CampaignEvent>(256);
 
     // ── HawkBit client + startup reconciliation ──────────────────────────────
-    let hawkbit = Arc::new(HawkbitClient::new(hawkbit_url, hawkbit_token));
-    register_targets(&hawkbit, &vins).await;
+    let hawkbit = Arc::new(HawkbitClient::new(
+        hawkbit_url,
+        hawkbit_user,
+        hawkbit_password,
+    ));
+    // Targets are no longer pre-registered from here. Each ota-agent self-
+    // registers on first DDI contact, using the gateway token propagated
+    // below. The old `register_targets(..)` call was dropped.
+    let gateway_token = hawkbit
+        .enable_gateway_token()
+        .await
+        .expect("failed to provision HawkBit gateway token");
+    info!("hawkbit: gateway token ready");
     seed_distribution_sets(&hawkbit).await;
 
     // ── MQTT connect ─────────────────────────────────────────────────────────
     let (mqtt_client, eventloop) = mqtt::connect(&mqtt_host, mqtt_port).await;
 
+    // Propagate the gateway token to every ota-agent over MQTT (retained, so
+    // agents joining later pick it up immediately).
+    mqtt::publish_gateway_token(&mqtt_client, &gateway_token).await;
+
     let campaigns = CampaignStore::new();
+
+    // Rehydrate the campaign store from HawkBit so restarts don't lose
+    // history. poll_campaign_state will update each vehicle's state on its
+    // first tick.
+    hydrate_campaigns(&hawkbit, &campaigns).await;
 
     let state = AppState {
         store: store.clone(),
@@ -158,21 +177,19 @@ async fn main() {
         campaigns: campaigns.clone(),
         campaign_tx: campaign_tx.clone(),
         hawkbit: hawkbit.clone(),
-        mqtt_client: mqtt_client.clone(),
     };
 
     // ── MQTT consumer (background task) ──────────────────────────────────────
-    tokio::spawn(mqtt::run(
-        eventloop,
-        store,
-        tx,
-        campaigns.clone(),
-        campaign_tx.clone(),
-        hawkbit.clone(),
-    ));
+    // MQTT only carries telemetry now. OTA state flows HawkBit → backend via
+    // `poll_campaign_state` below, not via MQTT status messages.
+    tokio::spawn(mqtt::run(eventloop, store, tx));
 
-    // ── HawkBit rollout poll (background task) ───────────────────────────────
-    tokio::spawn(poll_rollouts(hawkbit.clone(), campaigns, campaign_tx));
+    // ── HawkBit DDI reconciliation (background task) ─────────────────────────
+    tokio::spawn(poll_campaign_state(
+        hawkbit.clone(),
+        campaigns,
+        campaign_tx,
+    ));
 
     // ── Axum router ───────────────────────────────────────────────────────────
     let app = build_router(state);
@@ -185,15 +202,65 @@ async fn main() {
     axum::serve(listener, app).await.expect("server error");
 }
 
-// ── HawkBit startup + poll helpers ───────────────────────────────────────────
+// ── HawkBit startup helpers ──────────────────────────────────────────────────
 
-async fn register_targets(hawkbit: &HawkbitClient, vins: &[String]) {
-    for vin in vins {
-        if let Err(e) = hawkbit.register_target(vin).await {
-            warn!("hawkbit target registration for {} failed: {}", vin, e);
+/// Rebuild the in-memory campaign store from HawkBit rollouts on startup.
+/// Every rollout named `campaign-<uuid>` becomes a `Campaign` with all its
+/// targets in `PENDING`; `poll_campaign_state` then reconciles each vehicle's
+/// real state on its next tick. Individual-campaign failures are logged and
+/// skipped so one bad rollout doesn't prevent the others from hydrating.
+async fn hydrate_campaigns(hawkbit: &HawkbitClient, store: &CampaignStore) {
+    let rollouts = match hawkbit.list_rollouts().await {
+        Ok(r) => r,
+        Err(e) => {
+            warn!("skipping campaign hydration: list_rollouts failed: {e}");
+            return;
         }
+    };
+
+    let mut rehydrated = 0usize;
+    for r in rollouts {
+        let Some(campaign_id) = parse_campaign_uuid(&r.name) else {
+            continue;
+        };
+        let version = match hawkbit.distribution_set_version(r.distribution_set_id).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("hydrate: DS lookup failed for rollout {}: {e}", r.id);
+                continue;
+            }
+        };
+        let vins = match hawkbit.rollout_target_vins(r.id).await {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("hydrate: target lookup failed for rollout {}: {e}", r.id);
+                continue;
+            }
+        };
+
+        let mut vehicles = std::collections::HashMap::new();
+        for vin in vins {
+            vehicles.insert(vin, VehicleUpdateState::Pending);
+        }
+
+        let created = DateTime::from_timestamp_millis(r.created_at).unwrap_or_else(Utc::now);
+        store.insert(Campaign {
+            id: campaign_id,
+            version,
+            vehicles,
+            created,
+            rollout_id: Some(r.id),
+        });
+        rehydrated += 1;
     }
-    info!("hawkbit: registered {} targets", vins.len());
+    if rehydrated > 0 {
+        info!("hydrated {} campaign(s) from HawkBit", rehydrated);
+    }
+}
+
+fn parse_campaign_uuid(rollout_name: &str) -> Option<Uuid> {
+    let id = rollout_name.strip_prefix("campaign-")?;
+    Uuid::parse_str(id).ok()
 }
 
 async fn seed_distribution_sets(hawkbit: &HawkbitClient) {
@@ -210,48 +277,101 @@ async fn seed_distribution_sets(hawkbit: &HawkbitClient) {
     }
 }
 
-/// Every 5 seconds, reconcile the in-memory campaign store against HawkBit
-/// rollout state and broadcast transitions.
-async fn poll_rollouts(
+// ── DDI reconciliation ──────────────────────────────────────────────────────
+
+/// Every 3s, walk every non-terminal vehicle in every campaign and reconcile
+/// its state from HawkBit. HawkBit's per-action `status` handles PENDING /
+/// COMPLETE / FAILED cleanly; distinguishing DOWNLOADING from INSTALLING
+/// requires peeking at the latest status-history entry's `messages`, where
+/// ota-agents include `"DOWNLOADING"` or `"INSTALLING"` as the first message.
+async fn poll_campaign_state(
     hawkbit: Arc<HawkbitClient>,
     campaigns: CampaignStore,
     campaign_tx: broadcast::Sender<CampaignEvent>,
 ) {
-    let mut interval = tokio::time::interval(Duration::from_secs(5));
-    // First tick fires immediately; skip it so we don't race startup registration.
-    interval.tick().await;
+    let mut ticker = tokio::time::interval(Duration::from_secs(1));
+    ticker.tick().await; // skip the immediate first tick
 
     loop {
-        interval.tick().await;
+        ticker.tick().await;
         for campaign in campaigns.all() {
             let Some(rollout_id) = campaign.rollout_id else {
                 continue;
             };
-            let targets = match hawkbit.poll_rollout(rollout_id).await {
-                Ok(t) => t,
-                Err(e) => {
-                    if !e.is_unreachable() {
-                        warn!("poll_rollout({}) failed: {}", rollout_id, e);
-                    }
+
+            for (vin, prev) in &campaign.vehicles {
+                if is_terminal(prev) {
                     continue;
                 }
-            };
-            for (vin, new_state) in targets {
-                let previous = campaign.vehicles.get(&vin).cloned();
-                if changed(previous.as_ref(), &new_state) {
-                    if let Some(updated) =
-                        campaigns.set_vehicle_state(&campaign.id, &vin, new_state)
-                    {
-                        let _ = campaign_tx.send(CampaignEvent {
-                            campaign_id: campaign.id,
-                            vin,
-                            state: updated,
-                        });
-                    }
+                let new_state = match resolve_state(&hawkbit, vin, rollout_id, &campaign.version)
+                    .await
+                {
+                    Some(s) => s,
+                    None => continue,
+                };
+                if !changed(Some(prev), &new_state) {
+                    continue;
+                }
+                if let Some(updated) =
+                    campaigns.set_vehicle_state(&campaign.id, vin, new_state)
+                {
+                    let _ = campaign_tx.send(CampaignEvent {
+                        campaign_id: campaign.id,
+                        vin: vin.clone(),
+                        state: updated,
+                    });
                 }
             }
         }
     }
+}
+
+async fn resolve_state(
+    hawkbit: &HawkbitClient,
+    vin: &str,
+    rollout_id: u64,
+    campaign_version: &str,
+) -> Option<VehicleUpdateState> {
+    let actions = match hawkbit.list_target_actions(vin).await {
+        Ok(a) => a,
+        Err(e) => {
+            if !e.is_unreachable() {
+                warn!("list_target_actions({vin}) failed: {e}");
+            }
+            return None;
+        }
+    };
+    let action = actions.into_iter().find(|a| a.rollout == Some(rollout_id))?;
+
+    Some(match action.status.as_str() {
+        "finished" => VehicleUpdateState::Complete {
+            version: campaign_version.to_string(),
+        },
+        "error" | "canceled" => {
+            let error = latest_message(hawkbit, vin, action.id)
+                .await
+                .unwrap_or_else(|| "update failed".into());
+            VehicleUpdateState::Failed { error }
+        }
+        "running" => match latest_message(hawkbit, vin, action.id).await {
+            Some(msg) if msg.starts_with("INSTALLING") => VehicleUpdateState::Installing,
+            Some(msg) if msg.starts_with("DOWNLOADING") => VehicleUpdateState::Downloading,
+            _ => VehicleUpdateState::Pending,
+        },
+        _ => VehicleUpdateState::Pending,
+    })
+}
+
+async fn latest_message(hawkbit: &HawkbitClient, vin: &str, action_id: u64) -> Option<String> {
+    let entry = hawkbit.latest_action_status(vin, action_id).await.ok()??;
+    entry.messages.into_iter().next()
+}
+
+fn is_terminal(state: &VehicleUpdateState) -> bool {
+    matches!(
+        state,
+        VehicleUpdateState::Complete { .. } | VehicleUpdateState::Failed { .. }
+    )
 }
 
 fn changed(previous: Option<&VehicleUpdateState>, new: &VehicleUpdateState) -> bool {
@@ -279,18 +399,14 @@ mod tests {
         let hawkbit = Arc::new(HawkbitClient::new(
             "http://127.0.0.1:1".into(),
             "test".into(),
+            "test".into(),
         ));
-        // Build an MQTT client that isn't actually connected — the tests here
-        // never exercise publishing, they only hit HTTP routes.
-        let (mqtt_client, _el) =
-            AsyncClient::new(rumqttc::MqttOptions::new("test", "127.0.0.1", 1), 1);
         AppState {
             store: Store::new(),
             tx,
             campaigns: CampaignStore::new(),
             campaign_tx,
             hawkbit,
-            mqtt_client,
         }
     }
 

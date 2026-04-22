@@ -49,7 +49,7 @@
 
 ### Frontend
 
-- [ ] Add `frontend/src/useCampaignSocket.ts`: WebSocket composable for `/ws/campaigns`, snapshot hydration, transition merge by `(campaignId, vin)`, auto-reconnect
-- [ ] Add `frontend/src/CampaignPanel.vue`: version selector, vehicle checkboxes (all pre-selected), launch button, live campaign cards with per-vehicle state chips
-- [ ] Update `frontend/src/App.vue`: add Campaign tab alongside the map
-- [ ] Update `frontend/src/VehicleDrawer.vue`: active update state badge, version field updates on `COMPLETE`
+- [x] Add `frontend/src/useCampaignSocket.ts`: WebSocket composable for `/ws/campaigns`, snapshot hydration, transition merge by `(campaignId, vin)`, auto-reconnect
+- [x] Add `frontend/src/CampaignPanel.vue`: version selector, vehicle checkboxes (all pre-selected), launch button, live campaign cards with per-vehicle state chips
+- [x] Update `frontend/src/App.vue`: add Campaign tab alongside the map
+- [x] Update `frontend/src/VehicleDrawer.vue`: active update state badge, version field updates on `COMPLETE`

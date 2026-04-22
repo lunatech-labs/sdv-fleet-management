@@ -13,7 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     campaign::{Campaign, VehicleUpdateState},
-    mqtt, AppState,
+    AppState,
 };
 
 // ── Request / response schemas ──────────────────────────────────────────────
@@ -121,11 +121,8 @@ pub async fn create_campaign(
         }
     };
 
-    // Publish an ota/command per VIN so ota-agents start immediately. HawkBit
-    // would normally drive this; we short-circuit for demo snappiness.
-    for vin in &req.vins {
-        mqtt::publish_ota_command(&state.mqtt_client, vin, campaign_id, &req.version).await;
-    }
+    // No MQTT fan-out any more: HawkBit dispatches the rollout to targets
+    // and ota-agents pick it up through their DDI poll loop.
 
     // Seed the campaign store with every target in PENDING.
     let mut vehicles = HashMap::new();
