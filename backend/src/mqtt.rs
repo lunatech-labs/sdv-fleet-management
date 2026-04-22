@@ -43,11 +43,7 @@ pub async fn connect(mqtt_host: &str, mqtt_port: u16) -> (AsyncClient, EventLoop
 }
 
 /// Drive the MQTT event loop forever, dispatching telemetry messages.
-pub async fn run(
-    mut eventloop: EventLoop,
-    store: Store,
-    tx: broadcast::Sender<PositionEvent>,
-) {
+pub async fn run(mut eventloop: EventLoop, store: Store, tx: broadcast::Sender<PositionEvent>) {
     loop {
         match eventloop.poll().await {
             Ok(Event::Incoming(Packet::Publish(p))) => {

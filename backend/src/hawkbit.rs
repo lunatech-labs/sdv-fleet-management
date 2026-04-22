@@ -83,20 +83,22 @@ impl HawkbitClient {
     /// `CONTROLLER_PLUG_AND_PLAY`. This is what makes ota-agent self-
     /// registration work without admin credentials.
     pub async fn enable_gateway_token(&self) -> Result<String, HawkbitError> {
-        self.put_config("authentication.gatewaytoken.enabled", serde_json::json!(true))
-            .await?;
+        self.put_config(
+            "authentication.gatewaytoken.enabled",
+            serde_json::json!(true),
+        )
+        .await?;
 
-        let existing = self.get_config_string("authentication.gatewaytoken.key").await?;
+        let existing = self
+            .get_config_string("authentication.gatewaytoken.key")
+            .await?;
         if !existing.is_empty() {
             return Ok(existing);
         }
 
         let token = Uuid::new_v4().to_string();
-        self.put_config(
-            "authentication.gatewaytoken.key",
-            serde_json::json!(&token),
-        )
-        .await?;
+        self.put_config("authentication.gatewaytoken.key", serde_json::json!(&token))
+            .await?;
         Ok(token)
     }
 
@@ -112,11 +114,7 @@ impl HawkbitClient {
         Ok(cfg.value.unwrap_or_default())
     }
 
-    async fn put_config(
-        &self,
-        key: &str,
-        value: serde_json::Value,
-    ) -> Result<(), HawkbitError> {
+    async fn put_config(&self, key: &str, value: serde_json::Value) -> Result<(), HawkbitError> {
         let resp = self
             .http
             .put(self.url(&format!("/rest/v1/system/configs/{}", key)))
@@ -157,14 +155,15 @@ impl HawkbitClient {
             .await?;
         let resp = Self::check(resp).await?;
         let created: Vec<DistributionSet> = resp.json().await?;
-        let ds_id = created
-            .into_iter()
-            .next()
-            .map(|d| d.id)
-            .ok_or_else(|| HawkbitError::Status {
-                status: StatusCode::INTERNAL_SERVER_ERROR,
-                body: "empty distribution set creation response".into(),
-            })?;
+        let ds_id =
+            created
+                .into_iter()
+                .next()
+                .map(|d| d.id)
+                .ok_or_else(|| HawkbitError::Status {
+                    status: StatusCode::INTERNAL_SERVER_ERROR,
+                    body: "empty distribution set creation response".into(),
+                })?;
 
         // HawkBit requires a DS of type `os` to have an `os` software module
         // attached before it can be rolled out. Reuse one per (name, version).
@@ -174,11 +173,7 @@ impl HawkbitClient {
     }
 
     /// Create (or find) a software module of type `os` matching (name, version).
-    async fn ensure_software_module(
-        &self,
-        name: &str,
-        version: &str,
-    ) -> Result<u64, HawkbitError> {
+    async fn ensure_software_module(&self, name: &str, version: &str) -> Result<u64, HawkbitError> {
         let query = format!("name=={};version=={}", name, version);
         let resp = self
             .http
@@ -217,10 +212,7 @@ impl HawkbitClient {
         let body = serde_json::json!([{ "id": module_id }]);
         let resp = self
             .http
-            .post(self.url(&format!(
-                "/rest/v1/distributionsets/{}/assignedSM",
-                ds_id
-            )))
+            .post(self.url(&format!("/rest/v1/distributionsets/{}/assignedSM", ds_id)))
             .basic_auth(&self.user, Some(&self.password))
             .json(&body)
             .send()
@@ -389,10 +381,7 @@ impl HawkbitClient {
     pub async fn rollout_target_vins(&self, rollout_id: u64) -> Result<Vec<String>, HawkbitError> {
         let resp = self
             .http
-            .get(self.url(&format!(
-                "/rest/v1/rollouts/{}/deploygroups",
-                rollout_id
-            )))
+            .get(self.url(&format!("/rest/v1/rollouts/{}/deploygroups", rollout_id)))
             .basic_auth(&self.user, Some(&self.password))
             .send()
             .await?;
@@ -423,10 +412,7 @@ impl HawkbitClient {
     // ── Per-target action state (read-side of the DDI loop) ──────────────────
 
     /// Fetch actions for a target, most recent first.
-    pub async fn list_target_actions(
-        &self,
-        vin: &str,
-    ) -> Result<Vec<TargetAction>, HawkbitError> {
+    pub async fn list_target_actions(&self, vin: &str) -> Result<Vec<TargetAction>, HawkbitError> {
         let resp = self
             .http
             .get(self.url(&format!("/rest/v1/targets/{}/actions", vin)))
@@ -569,4 +555,3 @@ pub struct ActionStatusEntry {
 struct ActionStatusPage {
     content: Vec<ActionStatusEntry>,
 }
-

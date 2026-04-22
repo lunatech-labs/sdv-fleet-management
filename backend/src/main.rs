@@ -5,12 +5,12 @@ use axum::{
     Router,
 };
 use chrono::{DateTime, Utc};
-use uuid::Uuid;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
 use tracing::{debug, info, warn};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
+use uuid::Uuid;
 
 mod api;
 mod campaign;
@@ -185,11 +185,7 @@ async fn main() {
     tokio::spawn(mqtt::run(eventloop, store, tx));
 
     // ── HawkBit DDI reconciliation (background task) ─────────────────────────
-    tokio::spawn(poll_campaign_state(
-        hawkbit.clone(),
-        campaigns,
-        campaign_tx,
-    ));
+    tokio::spawn(poll_campaign_state(hawkbit.clone(), campaigns, campaign_tx));
 
     // ── Axum router ───────────────────────────────────────────────────────────
     let app = build_router(state);
@@ -223,7 +219,10 @@ async fn hydrate_campaigns(hawkbit: &HawkbitClient, store: &CampaignStore) {
         let Some(campaign_id) = parse_campaign_uuid(&r.name) else {
             continue;
         };
-        let version = match hawkbit.distribution_set_version(r.distribution_set_id).await {
+        let version = match hawkbit
+            .distribution_set_version(r.distribution_set_id)
+            .await
+        {
             Ok(v) => v,
             Err(e) => {
                 warn!("hydrate: DS lookup failed for rollout {}: {e}", r.id);
@@ -303,18 +302,15 @@ async fn poll_campaign_state(
                 if is_terminal(prev) {
                     continue;
                 }
-                let new_state = match resolve_state(&hawkbit, vin, rollout_id, &campaign.version)
-                    .await
-                {
-                    Some(s) => s,
-                    None => continue,
-                };
+                let new_state =
+                    match resolve_state(&hawkbit, vin, rollout_id, &campaign.version).await {
+                        Some(s) => s,
+                        None => continue,
+                    };
                 if !changed(Some(prev), &new_state) {
                     continue;
                 }
-                if let Some(updated) =
-                    campaigns.set_vehicle_state(&campaign.id, vin, new_state)
-                {
+                if let Some(updated) = campaigns.set_vehicle_state(&campaign.id, vin, new_state) {
                     let _ = campaign_tx.send(CampaignEvent {
                         campaign_id: campaign.id,
                         vin: vin.clone(),
@@ -341,7 +337,9 @@ async fn resolve_state(
             return None;
         }
     };
-    let action = actions.into_iter().find(|a| a.rollout == Some(rollout_id))?;
+    let action = actions
+        .into_iter()
+        .find(|a| a.rollout == Some(rollout_id))?;
 
     // Always read the latest status entry so we can log it, even in branches
     // that don't need it for the state mapping.
