@@ -8,7 +8,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
@@ -343,23 +343,44 @@ async fn resolve_state(
     };
     let action = actions.into_iter().find(|a| a.rollout == Some(rollout_id))?;
 
-    Some(match action.status.as_str() {
-        "finished" => VehicleUpdateState::Complete {
+    // Always read the latest status entry so we can log it, even in branches
+    // that don't need it for the state mapping.
+    let latest = latest_message(hawkbit, vin, action.id).await;
+    debug!(
+        "resolve_state vin={} rollout={} action_id={} status={} latest_msg={:?}",
+        vin, rollout_id, action.id, action.status, latest
+    );
+
+    // HawkBit reports `retrieved` (target has picked up the action) and
+    // `running` for in-progress actions, depending on version and whether the
+    // device has posted any `proceeding` feedback yet. Both need to be mapped
+    // via the message to distinguish DOWNLOADING from INSTALLING.
+    //
+    // There is a small window (~60ms) around the terminal feedback where the
+    // device has already posted `installed X.Y.Z` but HawkBit hasn't flipped
+    // action.status from `retrieved` to `finished` yet. Checking the message
+    // first avoids a transient Pending flash in the dashboard.
+    let state = match latest.as_deref() {
+        Some(msg) if msg.starts_with("installed ") => VehicleUpdateState::Complete {
             version: campaign_version.to_string(),
         },
-        "error" | "canceled" => {
-            let error = latest_message(hawkbit, vin, action.id)
-                .await
-                .unwrap_or_else(|| "update failed".into());
-            VehicleUpdateState::Failed { error }
-        }
-        "running" => match latest_message(hawkbit, vin, action.id).await {
-            Some(msg) if msg.starts_with("INSTALLING") => VehicleUpdateState::Installing,
-            Some(msg) if msg.starts_with("DOWNLOADING") => VehicleUpdateState::Downloading,
+        _ => match action.status.as_str() {
+            "finished" => VehicleUpdateState::Complete {
+                version: campaign_version.to_string(),
+            },
+            "error" | "canceled" => VehicleUpdateState::Failed {
+                error: latest.clone().unwrap_or_else(|| "update failed".into()),
+            },
+            "running" | "retrieved" => match latest.as_deref() {
+                Some(msg) if msg.starts_with("INSTALLING") => VehicleUpdateState::Installing,
+                Some(msg) if msg.starts_with("DOWNLOADING") => VehicleUpdateState::Downloading,
+                _ => VehicleUpdateState::Pending,
+            },
             _ => VehicleUpdateState::Pending,
         },
-        _ => VehicleUpdateState::Pending,
-    })
+    };
+    info!("resolve_state vin={} -> {:?}", vin, state);
+    Some(state)
 }
 
 async fn latest_message(hawkbit: &HawkbitClient, vin: &str, action_id: u64) -> Option<String> {
