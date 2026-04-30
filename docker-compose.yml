@@ -17,6 +17,10 @@ x-ota-agent-defaults: &ota-agent-defaults
   depends_on:
     mosquitto:
       condition: service_healthy
+    # ota-agents self-register against HawkBit DDI on startup — wait until
+    # HawkBit is healthy so the first request doesn't have to burn retries.
+    hawkbit:
+      condition: service_healthy
   restart: on-failure
 
 services:
@@ -424,20 +428,51 @@ services:
       VEHICLE_LAT:   "48.8710"
       VEHICLE_LON:   "2.4150"
 
+  # ── Postgres (HawkBit's persistence backend) ───────────────────────────────
+  # Replaces the default H2 in-memory DB, which is incompatible with recent
+  # H2 releases that removed CALL IDENTITY(). No volume is mounted: campaign
+  # history is still wiped on `docker compose down` (demo only).
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       hawkbit
+      POSTGRES_USER:     hawkbit
+      POSTGRES_PASSWORD: hawkbit
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hawkbit -d hawkbit"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
   # ── Eclipse HawkBit (OTA campaign store) ───────────────────────────────────
-  # H2 in-memory DB: campaign history is lost on restart (demo only).
   hawkbit:
     image: hawkbit/hawkbit-update-server:latest
     ports:
       - "8083:8080"
     environment:
-      SPRING_DATASOURCE_URL: jdbc:h2:mem:hawkbit
+      SPRING_DATASOURCE_URL:                jdbc:postgresql://postgres:5432/hawkbit
+      SPRING_DATASOURCE_USERNAME:           hawkbit
+      SPRING_DATASOURCE_PASSWORD:           hawkbit
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME:  org.postgresql.Driver
+      SPRING_JPA_DATABASE:                  POSTGRESQL
       HAWKBIT_TOKEN: ${HAWKBIT_TOKEN}
+      # Management API user — must match HAWKBIT_USER / HAWKBIT_PASSWORD on the
+      # backend service. {noop} tells Spring Security the password is plaintext.
+      HAWKBIT_SERVER_IM_USERS_0_USERNAME:    ${HAWKBIT_USER:-admin}
+      HAWKBIT_SERVER_IM_USERS_0_PASSWORD:    "{noop}${HAWKBIT_PASSWORD:-admin}"
+      HAWKBIT_SERVER_IM_USERS_0_FIRSTNAME:   admin
+      HAWKBIT_SERVER_IM_USERS_0_LASTNAME:    admin
+      HAWKBIT_SERVER_IM_USERS_0_EMAIL:       admin@example.org
+      HAWKBIT_SERVER_IM_USERS_0_PERMISSIONS: ALL
+    depends_on:
+      postgres:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8080/management/health"]
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health"]
       interval: 10s
-      timeout: 5s
+      timeout: 15s
       retries: 10
+      start_period: 90s
 
   # ── ota-agent (one per vehicle) ────────────────────────────────────────────
   ota-agent-01:
@@ -649,8 +684,9 @@ services:
       MQTT_HOST:     mosquitto
       MQTT_PORT:     "1883"
       VEHICLES_FILE: /app/vehicles.json
-      HAWKBIT_URL:   http://hawkbit:8080
-      HAWKBIT_TOKEN: ${HAWKBIT_TOKEN}
+      HAWKBIT_URL:      http://hawkbit:8080
+      HAWKBIT_USER:     ${HAWKBIT_USER:-admin}
+      HAWKBIT_PASSWORD: ${HAWKBIT_PASSWORD:-admin}
     volumes:
       - ./seed/vehicles.json:/app/vehicles.json:ro
     depends_on:
