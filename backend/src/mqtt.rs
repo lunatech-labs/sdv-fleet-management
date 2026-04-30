@@ -1,22 +1,33 @@
 use std::time::Duration;
 
-use rumqttc::{AsyncClient, Event, MqttOptions, Packet, QoS};
+use rumqttc::{AsyncClient, Event, EventLoop, MqttOptions, Packet, QoS};
 use tokio::sync::broadcast;
 use tracing::{debug, error, info, warn};
 
-use crate::models::PositionEvent;
-use crate::store::Store;
+use crate::{models::PositionEvent, store::Store};
 
-pub async fn start(
-    store: Store,
-    tx: broadcast::Sender<PositionEvent>,
-    mqtt_host: String,
-    mqtt_port: u16,
-) {
-    let mut opts = MqttOptions::new("fleet-backend", &mqtt_host, mqtt_port);
+/// Broadcast the HawkBit gateway token to every ota-agent. Published with the
+/// MQTT retained flag so agents that connect later (or reconnect) pick it up
+/// from the broker without needing the backend to re-announce. Without this
+/// token, agents can't authenticate to HawkBit's DDI API and can't self-
+/// register.
+pub async fn publish_gateway_token(client: &AsyncClient, token: &str) {
+    if let Err(e) = client
+        .publish("fleet/gateway-token", QoS::AtLeastOnce, true, token)
+        .await
+    {
+        warn!("failed to publish fleet/gateway-token: {e}");
+    }
+}
+
+/// Build the async MQTT client + event loop. The backend subscribes only to
+/// telemetry (lat/lon) now — OTA dispatch and feedback happen over HawkBit's
+/// DDI API directly between HawkBit and the ota-agent.
+pub async fn connect(mqtt_host: &str, mqtt_port: u16) -> (AsyncClient, EventLoop) {
+    let mut opts = MqttOptions::new("fleet-backend", mqtt_host, mqtt_port);
     opts.set_keep_alive(Duration::from_secs(30));
 
-    let (client, mut eventloop) = AsyncClient::new(opts, 256);
+    let (client, eventloop) = AsyncClient::new(opts, 256);
 
     client
         .subscribe("kuksa/+/telemetry/#", QoS::AtLeastOnce)
@@ -28,25 +39,30 @@ pub async fn start(
         mqtt_host, mqtt_port
     );
 
+    (client, eventloop)
+}
+
+/// Drive the MQTT event loop forever, dispatching telemetry messages.
+pub async fn run(mut eventloop: EventLoop, store: Store, tx: broadcast::Sender<PositionEvent>) {
     loop {
         match eventloop.poll().await {
             Ok(Event::Incoming(Packet::Publish(p))) => {
-                debug!("MQTT publish received on topic: {}", p.topic);
                 let topic = p.topic.as_str();
                 let payload = match std::str::from_utf8(&p.payload) {
                     Ok(s) => s.to_string(),
                     Err(_) => continue,
                 };
 
-                // Topic shape: kuksa/{vin}/telemetry/{signal_path}
-                let parts: Vec<&str> = topic.splitn(4, '/').collect();
-                if parts.len() < 4 {
-                    continue;
+                if let Some(rest) = topic.strip_prefix("kuksa/") {
+                    let parts: Vec<&str> = rest.splitn(3, '/').collect();
+                    if parts.len() < 3 {
+                        continue;
+                    }
+                    let vin = parts[0];
+                    if parts[1] == "telemetry" {
+                        handle_signal(&store, &tx, vin, parts[2], payload);
+                    }
                 }
-                let vin = parts[1];
-                let signal = parts[3];
-
-                handle_signal(&store, &tx, vin, signal, payload);
             }
             Ok(_) => {}
             Err(e) => {
@@ -56,6 +72,8 @@ pub async fn start(
         }
     }
 }
+
+// ── Telemetry ────────────────────────────────────────────────────────────────
 
 fn handle_signal(
     store: &Store,
