@@ -37,12 +37,12 @@ test.describe('Fleet table', () => {
   })
 
   test('toggle button shows the table', async ({ page }) => {
-    await page.locator('.toggle-btn').click()
+    await page.locator('.toggle-table').click()
     await expect(page.locator('.fleet-table')).toBeVisible()
   })
 
   test('toggle button hides an open table', async ({ page }) => {
-    const btn = page.locator('.toggle-btn')
+    const btn = page.locator('.toggle-table')
     await btn.click()
     await expect(page.locator('.fleet-table')).toBeVisible()
     await btn.click()
@@ -51,7 +51,7 @@ test.describe('Fleet table', () => {
 
   test.describe('when open', () => {
     test.beforeEach(async ({ page }) => {
-      await page.locator('.toggle-btn').click()
+      await page.locator('.toggle-table').click()
       await expect(page.locator('.fleet-table')).toBeVisible()
     })
 
