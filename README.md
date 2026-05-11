@@ -1,6 +1,6 @@
-# SDV Fleet Management — v1 Demo
+# SDV Fleet Management — v2 Demo
 
-A client-facing demo showcasing Rust as a high-performance backend for vehicle fleet management, using Eclipse Kuksa to simulate a realistic fleet of 20 vehicles. Live GPS positions flow from per-vehicle Kuksa Databrokers → MQTT → Rust backend → browser map.
+A client-facing demo showcasing Rust as a high-performance backend for vehicle fleet management, using Eclipse Kuksa to simulate a realistic fleet of 20 vehicles. Live GPS positions flow from per-vehicle Kuksa Databrokers → MQTT → Rust backend → browser map. V2 adds over-the-air (OTA) software update campaigns powered by Eclipse HawkBit: create a rollout from the UI, watch vehicle markers change colour as updates progress, and track per-vehicle state in real time via WebSocket.
 
 ---
 
@@ -10,7 +10,7 @@ A client-facing demo showcasing Rust as a high-performance backend for vehicle f
 git clone git@github.com:lunatech-labs/sdv-fleet-management.git
 cd sdv-fleet-management
 
-# Copy .env.example to .env and modify the values if necessary.
+# Copy .env.example to .env — set HAWKBIT_TOKEN, HAWKBIT_USER, HAWKBIT_PASSWORD.
 cp .env.example .env
 
 docker compose up
@@ -22,21 +22,25 @@ Then visit: `http://localhost:8080`.
 
 ```
 Browser (Vue 3)
-    │  REST GET /fleet
-    │  WebSocket /ws/fleet
+    │  REST GET /fleet, /campaigns, /versions
+    │  WebSocket /ws/fleet, /ws/campaigns
     ▼
 Rust Backend (axum · port 3000)
     │  MQTT subscribe: kuksa/+/telemetry/#
-    ▼
-Eclipse Mosquitto (port 1883)
-    ▲
-    │  2 dynamic signals/vehicle at 1 Hz (lat/lon)
-    │
-┌─────────────────────────────────────┐
-│  20 vehicles                        │
-│  Kuksa Databroker + kuksa2mqtt      │
-│  sidecar (ports 55556–55575)        │
-└─────────────────────────────────────┘
+    │  REST Management API
+    ▼                         ▼
+Eclipse Mosquitto         Eclipse HawkBit (port 8083)
+(port 1883)                   │  DDI poll loop
+    ▲                         ▼
+    │  2 dynamic signals   OTA agents (×20, Rust)
+    │  per vehicle at 1 Hz     │  gRPC Set SoftwareVersion
+    │  (lat/lon)               │  MQTT publish ota/{vin}/state
+    │                          │
+┌──────────────────────────────────────┐
+│  20 vehicles                         │
+│  Kuksa Databroker + kuksa2mqtt       │
+│  sidecar (ports 55556–55575)         │
+└──────────────────────────────────────┘
     ▲
     │  Seed script (Python, runs once)
 ```
@@ -163,13 +167,23 @@ curl http://localhost:3000/health
 curl -s http://localhost:3000/fleet | jq '.[0]'
 curl -s http://localhost:3000/vehicles/VIN-0001 | jq
 
+# OTA campaigns
+curl -s http://localhost:3000/versions | jq
+curl -s http://localhost:3000/campaigns | jq
+curl -s -X POST http://localhost:3000/campaigns \
+  -H 'Content-Type: application/json' \
+  -d '{"version":"1.1.0","vins":["VIN-0001","VIN-0002"]}' | jq
+curl -s http://localhost:3000/campaigns/<id> | jq
+
 # Swagger UI
 open http://localhost:3000/docs
 
-# WebSocket live stream (requires websocat: brew install websocat)
+# WebSocket live streams (requires websocat: brew install websocat)
 websocat ws://localhost:3000/ws/fleet
 # {"vin":"VIN-0003","lat":48.8641,"lon":2.3318}
-# {"vin":"VIN-0011","lat":48.8462,"lon":2.3204}
+
+websocat ws://localhost:3000/ws/campaigns
+# {"campaign_id":"...","vin":"VIN-0001","state":"Installing"}
 ```
 
 ### Frontend
@@ -182,6 +196,8 @@ open http://localhost:8080
 - 20 vehicle pins visible on the Paris map
 - Pins move in real time (~1 Hz)
 - Clicking a pin opens the drawer with VIN, brand, model, and software version
+- Campaign Panel lets you select a software version and target vehicles, then launch a rollout
+- Vehicle markers change colour as OTA state progresses (Pending, Downloading, Installing, Succeeded, Failed)
 
 For local development without Docker:
 ```sh
@@ -252,4 +268,5 @@ npm test
 | Mosquitto MQTT | 1883 |
 | Kuksa Databroker VIN-0001–0020 | 55556–55575 |
 | Rust backend | 3000 |
+| Eclipse HawkBit | 8083 |
 | Frontend | 8080 |
