@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { reactive, ref, computed, onMounted } from 'vue'
+import { reactive, ref, computed, watch, onMounted } from 'vue'
 import MapView from './MapView.vue'
 import VehicleDrawer from './VehicleDrawer.vue'
 import FleetTable from './FleetTable.vue'
@@ -15,6 +15,22 @@ const selected = ref<VehicleRecord | null>(null)
 const selectedVin = computed(() => selected.value?.vin ?? null)
 const tableVisible = ref(false)
 const campaignsVisible = ref(false)
+const filteredVins = ref<Set<string> | null>(null)
+
+watch(tableVisible, visible => { if (!visible) filteredVins.value = null })
+
+function onFiltered(list: VehicleRecord[]) {
+  filteredVins.value = new Set(list.map(v => v.vin))
+}
+
+const displayedVehicles = computed<Record<string, VehicleRecord>>(() => {
+  if (!filteredVins.value) return vehicles
+  const out: Record<string, VehicleRecord> = {}
+  for (const vin of filteredVins.value) {
+    if (vehicles[vin]) out[vin] = vehicles[vin]
+  }
+  return out
+})
 
 onMounted(async () => {
   const data: VehicleRecord[] = await fetch(`${BACKEND}/fleet`).then(r => r.json())
@@ -41,7 +57,7 @@ onTransition((_campaignId, vin, state) => {
   <div class="app">
     <div class="map-panel">
       <MapView
-        :vehicles="vehicles"
+        :vehicles="displayedVehicles"
         :campaigns="campaigns"
         @select="selected = $event"
       />
@@ -100,6 +116,7 @@ onTransition((_campaignId, vin, state) => {
       v-if="tableVisible"
       :vehicles="vehicles"
       :selected-vin="selectedVin"
+      @filtered="onFiltered"
     />
     <CampaignPanel
       v-if="campaignsVisible"

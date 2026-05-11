@@ -7,6 +7,8 @@ const props = defineProps<{
   selectedVin: string | null
 }>()
 
+const emit = defineEmits<{ filtered: [list: VehicleRecord[]] }>()
+
 type GroupField = 'none' | 'brand' | 'model' | 'software_version'
 
 const searchQuery = ref('')
@@ -60,6 +62,8 @@ const filtered = computed(() => {
   return list
 })
 
+watch(filtered, list => emit('filtered', list), { immediate: true })
+
 const groups = computed(() => {
   if (groupBy.value === 'none') return null
   const field = groupBy.value as keyof VehicleRecord
@@ -93,13 +97,6 @@ const groups = computed(() => {
         placeholder="Search VIN, make, model, software..."
       >
       <div class="controls">
-        <button
-          v-if="isDirty"
-          class="reset-btn"
-          @click="resetFilters"
-        >
-          Reset
-        </button>
         <div class="control-group">
           <label>Filter</label>
           <select v-model="filterField">
@@ -149,6 +146,13 @@ const groups = computed(() => {
             </option>
           </select>
         </div>
+        <button
+          v-if="isDirty"
+          class="reset-btn"
+          @click="resetFilters"
+        >
+          Reset
+        </button>
       </div>
     </div>
 
@@ -302,7 +306,6 @@ const groups = computed(() => {
 }
 
 .reset-btn {
-  margin-left: auto;
   padding: 3px 9px;
   font-size: 11px;
   border: 1px solid #d0d0d0;
