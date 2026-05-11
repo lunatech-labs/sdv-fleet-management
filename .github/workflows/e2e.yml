@@ -2,15 +2,12 @@ name: E2E
 
 on:
   push:
-    branches: [main]
+    branches: [ 'main' ]
+  pull_request:
     paths:
-      - e2e/**
-      - frontend/**
-      - backend/**
-      - kuksa2mqtt/**
-      - seed/**
-      - mosquitto/**
-      - docker-compose.yml
+      - '.github/workflow/e2e.yml'
+      - 'frontend/**'
+      - 'e2e/**'
 
 jobs:
   ci:
