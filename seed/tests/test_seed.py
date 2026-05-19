@@ -121,3 +121,48 @@ def test_seed_vehicle_raises_after_max_retries(mock_vss_client, mock_sleep):
 
     with pytest.raises(RuntimeError, match="Could not seed VIN-0001"):
         seed_vehicle(vehicle, 1)
+
+
+@patch("seed.VSSClient")
+def test_seed_vehicle_writes_exactly_five_signals(mock_vss_client):
+    """Exactly the five VSS signals from VSS_SIGNALS must be written — no more, no less."""
+    client = make_mock_client()
+    mock_vss_client.return_value = client
+
+    vehicle = {
+        "vin": "VIN-0001",
+        "brand": "Toyota",
+        "model": "Camry",
+        "software_version": "1.0.0",
+        "latitude": 48.8566,
+        "longitude": 2.3522,
+    }
+
+    seed_vehicle(vehicle, 1)
+
+    written = client.set_current_values.call_args[0][0]
+    assert len(written) == 5, (
+        f"Expected 5 signals, got {len(written)}: {list(written.keys())}"
+    )
+
+
+@patch("seed.time.sleep")
+@patch("seed.VSSClient")
+def test_seed_vehicle_retry_sleeps_for_retry_interval(mock_vss_client, mock_sleep):
+    """Each retry must sleep for exactly RETRY_INTERVAL seconds (2 s)."""
+    client = make_mock_client()
+    client.set_current_values.side_effect = [Exception("not ready"), None]
+    mock_vss_client.return_value = client
+
+    vehicle = {
+        "vin": "VIN-0001",
+        "brand": "Toyota",
+        "model": "Camry",
+        "software_version": "1.0.0",
+        "latitude": 48.8566,
+        "longitude": 2.3522,
+    }
+
+    seed_vehicle(vehicle, 1)
+
+    mock_sleep.assert_called_once_with(2)
