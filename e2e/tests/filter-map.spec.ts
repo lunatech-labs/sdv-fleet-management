@@ -19,7 +19,7 @@ test.describe('map reflects table filters', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
     await expect(page.locator(MARKER)).toHaveCount(EXPECTED_FLEET_SIZE, { timeout: 30_000 })
-    await page.locator('.toggle-btn').click()
+    await page.locator('.toggle-table').click()
     await expect(page.locator('.fleet-table')).toBeVisible()
   })
 
@@ -67,7 +67,7 @@ test.describe('map reflects table filters', () => {
     await fg.locator('select').nth(1).selectOption(brand)
     await expect(page.locator(MARKER)).toHaveCount(fleet.filter(v => v.brand === brand).length)
 
-    await page.locator('.toggle-btn').click()
+    await page.locator('.toggle-table').click()
     await expect(page.locator(MARKER)).toHaveCount(EXPECTED_FLEET_SIZE)
   })
 
