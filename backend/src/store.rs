@@ -73,6 +73,51 @@ mod tests {
     }
 
     #[test]
+    fn insert_and_get_round_trips() {
+        let store = Store::new();
+        store.insert(make_record("VIN-0001"));
+        let r = store.get("VIN-0001").unwrap();
+        assert_eq!(r.vin, "VIN-0001");
+        assert_eq!(r.brand, "Acme");
+    }
+
+    #[test]
+    fn get_returns_none_for_unknown_vin() {
+        let store = Store::new();
+        assert!(store.get("VIN-UNKNOWN").is_none());
+    }
+
+    #[test]
+    fn all_returns_all_inserted_records() {
+        let store = Store::new();
+        store.insert(make_record("VIN-0001"));
+        store.insert(make_record("VIN-0002"));
+        assert_eq!(store.all().len(), 2);
+    }
+
+    #[test]
+    fn update_string_modifies_field_and_updates_last_seen() {
+        let store = Store::new();
+        let mut r = make_record("VIN-0001");
+        let before = Utc::now();
+        r.last_seen = before;
+        store.insert(r);
+
+        store.update_string("VIN-0001", |rec| rec.software_version = "2.0.0".into());
+
+        let updated = store.get("VIN-0001").unwrap();
+        assert_eq!(updated.software_version, "2.0.0");
+        assert!(updated.last_seen >= before);
+    }
+
+    #[test]
+    fn update_string_unknown_vin_is_noop() {
+        let store = Store::new();
+        // Must not panic on a missing VIN.
+        store.update_string("VIN-UNKNOWN", |rec| rec.software_version = "2.0.0".into());
+    }
+
+    #[test]
     fn update_position_unknown_vin_returns_none() {
         let store = Store::new();
         assert!(store
@@ -92,5 +137,39 @@ mod tests {
 
         let updated = store.get("VIN-0001").unwrap();
         assert!(updated.last_seen > before);
+    }
+
+    #[test]
+    fn update_position_returns_new_coordinates() {
+        let store = Store::new();
+        store.insert(make_record("VIN-0001"));
+
+        let (lat, lon) = store
+            .update_position("VIN-0001", Some(48.85), Some(2.35))
+            .unwrap();
+        assert_eq!(lat, 48.85);
+        assert_eq!(lon, 2.35);
+    }
+
+    #[test]
+    fn update_position_only_lat_preserves_lon() {
+        let store = Store::new();
+        let mut r = make_record("VIN-0001");
+        r.longitude = 20.0;
+        store.insert(r);
+
+        let (_, lon) = store.update_position("VIN-0001", Some(99.0), None).unwrap();
+        assert_eq!(lon, 20.0);
+    }
+
+    #[test]
+    fn update_position_only_lon_preserves_lat() {
+        let store = Store::new();
+        let mut r = make_record("VIN-0001");
+        r.latitude = 10.0;
+        store.insert(r);
+
+        let (lat, _) = store.update_position("VIN-0001", None, Some(99.0)).unwrap();
+        assert_eq!(lat, 10.0);
     }
 }

@@ -412,6 +412,18 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
+    fn make_vehicle(vin: &str) -> VehicleRecord {
+        VehicleRecord {
+            vin: vin.to_string(),
+            brand: "Acme".to_string(),
+            model: "X1".to_string(),
+            software_version: "1.0.0".to_string(),
+            latitude: 48.85,
+            longitude: 2.35,
+            last_seen: Utc::now(),
+        }
+    }
+
     fn test_state() -> AppState {
         let (tx, _) = broadcast::channel(1);
         let (campaign_tx, _) = broadcast::channel(1);
@@ -560,6 +572,212 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+
+    // ── Pure-helper unit tests ────────────────────────────────────────────────
+
+    #[test]
+    fn is_terminal_complete_and_failed_are_terminal() {
+        assert!(is_terminal(&VehicleUpdateState::Complete {
+            version: "1.0".into()
+        }));
+        assert!(is_terminal(&VehicleUpdateState::Failed {
+            error: "oops".into()
+        }));
+    }
+
+    #[test]
+    fn is_terminal_non_terminal_states_return_false() {
+        assert!(!is_terminal(&VehicleUpdateState::Pending));
+        assert!(!is_terminal(&VehicleUpdateState::Downloading));
+        assert!(!is_terminal(&VehicleUpdateState::Installing));
+    }
+
+    #[test]
+    fn changed_none_previous_is_always_true() {
+        assert!(changed(None, &VehicleUpdateState::Pending));
+        assert!(changed(
+            None,
+            &VehicleUpdateState::Complete {
+                version: "1.0".into()
+            }
+        ));
+    }
+
+    #[test]
+    fn changed_same_discriminant_is_false() {
+        assert!(!changed(
+            Some(&VehicleUpdateState::Pending),
+            &VehicleUpdateState::Pending
+        ));
+        assert!(!changed(
+            Some(&VehicleUpdateState::Downloading),
+            &VehicleUpdateState::Downloading
+        ));
+    }
+
+    #[test]
+    fn changed_different_discriminant_is_true() {
+        assert!(changed(
+            Some(&VehicleUpdateState::Pending),
+            &VehicleUpdateState::Downloading
+        ));
+        assert!(changed(
+            Some(&VehicleUpdateState::Downloading),
+            &VehicleUpdateState::Complete {
+                version: "1.0".into()
+            }
+        ));
+    }
+
+    #[test]
+    fn parse_campaign_uuid_valid_name() {
+        let id = Uuid::new_v4();
+        let name = format!("campaign-{id}");
+        assert_eq!(parse_campaign_uuid(&name), Some(id));
+    }
+
+    #[test]
+    fn parse_campaign_uuid_no_prefix_returns_none() {
+        assert!(parse_campaign_uuid("not-a-campaign").is_none());
+        assert!(parse_campaign_uuid("").is_none());
+    }
+
+    #[test]
+    fn parse_campaign_uuid_invalid_uuid_returns_none() {
+        assert!(parse_campaign_uuid("campaign-not-a-uuid").is_none());
+    }
+
+    // ── REST handler tests (populated state) ─────────────────────────────────
+
+    #[tokio::test]
+    async fn fleet_returns_vehicles_sorted_by_vin() {
+        let state = test_state();
+        state.store.insert(make_vehicle("VIN-0002"));
+        state.store.insert(make_vehicle("VIN-0001"));
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/fleet")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let vehicles: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(vehicles[0]["vin"], "VIN-0001");
+        assert_eq!(vehicles[1]["vin"], "VIN-0002");
+    }
+
+    #[tokio::test]
+    async fn get_vehicle_known_vin_returns_200_with_data() {
+        let state = test_state();
+        state.store.insert(make_vehicle("VIN-0001"));
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/vehicles/VIN-0001")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let v: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(v["vin"], "VIN-0001");
+        assert_eq!(v["brand"], "Acme");
+    }
+
+    #[tokio::test]
+    async fn create_campaign_empty_version_returns_400() {
+        let state = test_state();
+        state.store.insert(make_vehicle("VIN-0001"));
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/campaigns")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"version":"","vins":["VIN-0001"]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let err: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(err["error"].as_str().unwrap().contains("version"));
+    }
+
+    #[tokio::test]
+    async fn create_campaign_whitespace_version_returns_400() {
+        let state = test_state();
+        state.store.insert(make_vehicle("VIN-0001"));
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/campaigns")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"version":"   ","vins":["VIN-0001"]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn create_campaign_empty_vins_returns_400() {
+        let state = test_state();
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/campaigns")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"version":"1.0.0","vins":[]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let err: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(err["error"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn create_campaign_unknown_vin_returns_400() {
+        let state = test_state(); // empty store — any VIN is unknown
+
+        let response = build_router(state)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/campaigns")
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"version":"1.0.0","vins":["VIN-UNKNOWN"]}"#))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        let err: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert!(err["error"]
+            .as_str()
+            .unwrap()
+            .to_lowercase()
+            .contains("unknown vin"));
     }
 
     #[tokio::test]
