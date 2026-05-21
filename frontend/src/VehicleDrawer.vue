@@ -63,10 +63,10 @@ function stateLabel(s: VehicleUpdateState): string {
 <style scoped>
 .drawer {
   position: fixed;
-  top: 0; right: 0;
+  top: 0; left: 0;
   width: 260px; height: 100%;
   background: #fff;
-  box-shadow: -4px 0 20px rgba(0, 0, 0, 0.12);
+  box-shadow: 4px 0 20px rgba(0, 0, 0, 0.12);
   padding: 24px 20px;
   z-index: 1000;
 }
@@ -74,6 +74,7 @@ function stateLabel(s: VehicleUpdateState): string {
 .close {
   position: absolute;
   top: 14px; right: 14px;
+  left: auto;
   background: none; border: none;
   font-size: 18px; cursor: pointer; color: #888;
 }
@@ -112,5 +113,5 @@ dd { font-size: 14px; font-family: monospace; color: #222; }
 .chip-failed      { background: #b00020; }
 
 .drawer-enter-active, .drawer-leave-active { transition: transform 0.2s ease; }
-.drawer-enter-from, .drawer-leave-to       { transform: translateX(100%); }
+.drawer-enter-from, .drawer-leave-to       { transform: translateX(-100%); }
 </style>
