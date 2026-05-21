@@ -85,3 +85,77 @@ impl CampaignStore {
         Some(state)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use chrono::Utc;
+    use uuid::Uuid;
+
+    use super::*;
+
+    fn make_campaign(vins: &[&str]) -> Campaign {
+        let mut vehicles = HashMap::new();
+        for vin in vins {
+            vehicles.insert(vin.to_string(), VehicleUpdateState::Pending);
+        }
+        Campaign {
+            id: Uuid::new_v4(),
+            version: "1.0.0".into(),
+            vehicles,
+            created: Utc::now(),
+            rollout_id: None,
+        }
+    }
+
+    #[test]
+    fn insert_and_get_round_trips() {
+        let store = CampaignStore::new();
+        let c = make_campaign(&["VIN-0001"]);
+        let id = c.id;
+        store.insert(c);
+        let fetched = store.get(&id).unwrap();
+        assert_eq!(fetched.id, id);
+        assert_eq!(fetched.version, "1.0.0");
+    }
+
+    #[test]
+    fn get_returns_none_for_unknown_id() {
+        let store = CampaignStore::new();
+        assert!(store.get(&Uuid::new_v4()).is_none());
+    }
+
+    #[test]
+    fn all_returns_all_inserted_campaigns() {
+        let store = CampaignStore::new();
+        store.insert(make_campaign(&["VIN-0001"]));
+        store.insert(make_campaign(&["VIN-0002"]));
+        assert_eq!(store.all().len(), 2);
+    }
+
+    #[test]
+    fn set_vehicle_state_updates_state_and_returns_new_state() {
+        let store = CampaignStore::new();
+        let c = make_campaign(&["VIN-0001"]);
+        let id = c.id;
+        store.insert(c);
+
+        let result = store.set_vehicle_state(&id, "VIN-0001", VehicleUpdateState::Downloading);
+        assert!(matches!(result, Some(VehicleUpdateState::Downloading)));
+
+        let fetched = store.get(&id).unwrap();
+        assert!(matches!(
+            fetched.vehicles["VIN-0001"],
+            VehicleUpdateState::Downloading
+        ));
+    }
+
+    #[test]
+    fn set_vehicle_state_unknown_campaign_returns_none() {
+        let store = CampaignStore::new();
+        let result =
+            store.set_vehicle_state(&Uuid::new_v4(), "VIN-0001", VehicleUpdateState::Downloading);
+        assert!(result.is_none());
+    }
+}
