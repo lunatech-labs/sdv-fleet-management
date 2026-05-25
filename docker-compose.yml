@@ -433,7 +433,7 @@ services:
   # H2 releases that removed CALL IDENTITY(). No volume is mounted: campaign
   # history is still wiped on `docker compose down` (demo only).
   postgres:
-    image: postgres:16-alpine
+    image: postgres:18-alpine
     environment:
       POSTGRES_DB:       hawkbit
       POSTGRES_USER:     hawkbit
