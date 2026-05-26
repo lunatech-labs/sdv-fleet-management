@@ -2,6 +2,8 @@
 
 A client-facing demo showcasing Rust as a high-performance backend for vehicle fleet management, using Eclipse Kuksa to simulate a realistic fleet of 20 vehicles. Live GPS positions flow from per-vehicle Kuksa Databrokers → MQTT → Rust backend → browser map. V2 adds over-the-air (OTA) software update campaigns powered by Eclipse HawkBit: create a rollout from the UI, watch vehicle markers change colour as updates progress, and track per-vehicle state in real time via WebSocket.
 
+For a guided presentation walkthrough with screenshots and a screen recording, see [DEMO.md](DEMO.md).
+
 ---
 
 ## Quickstart
