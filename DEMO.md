@@ -63,7 +63,7 @@ Positions flow from 20 Kuksa Databrokers through MQTT to the Rust backend, then 
 
 ### 2. Vehicle detail drawer
 
-Click any pin to open the detail drawer on the left. It shows the vehicle name, VIN, current software version, live coordinates, and OTA status chip.
+Click any pin to open the detail drawer on the left. It shows the vehicle name, VIN, manufacturer, model, current software version, live coordinates, and OTA status chip.
 
 ![Vehicle detail drawer](docs/screenshots/car_modal.png)
 
@@ -85,7 +85,7 @@ Use the search box to filter by VIN, make, model, or software version. Filtering
 
 Click the Campaign icon in the toolbar to open the Campaigns panel.
 
-1. Select a target software version from the dropdown.
+1. Select a target software version from the dropdown (populated by `GET /versions`).
 2. Check the vehicles to include, or leave all 20 selected.
 3. Click **Launch**.
 
@@ -98,7 +98,7 @@ Pending  ->  Downloading  ->  Installing  ->  Complete
                                           ->  Failed
 ```
 
-A 20% simulated failure rate is intentional -- it demonstrates realistic error handling rather than a guaranteed happy path. State chips update live via WebSocket.
+A 20% simulated failure rate is intentional -- it demonstrates realistic error handling rather than a guaranteed happy path. State chips on the campaign card update live via WebSocket.
 
 ---
 
@@ -109,6 +109,8 @@ Once a campaign is running you can watch state chips update in real time. Vehicl
 ![Campaign deployment in progress](docs/screenshots/campaign_deployment.png)
 
 Scroll through the campaign history to show completed rollouts alongside the new one.
+
+Once a vehicle reaches **Complete**, click its map pin -- the software version in the drawer reflects the newly installed version, read from the campaign state.
 
 ---
 
@@ -122,7 +124,7 @@ Both panels can be open simultaneously. This is useful for showing how the fleet
 
 ### 7. API explorer
 
-Switch to `http://localhost:3000/docs`. Walk through the available endpoints and execute a live request from the browser. This shows the clean API surface and the OpenAPI spec generated directly from the Rust source.
+Switch to `http://localhost:3000/docs` (Swagger UI). All REST endpoints are documented and executable from the browser. This shows the clean API surface and the OpenAPI spec generated directly from the Rust source.
 
 ---
 
