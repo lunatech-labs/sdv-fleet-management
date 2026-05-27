@@ -24,49 +24,6 @@ Then visit: `http://localhost:8080`.
 
 ---
 
-## Showcase
-
-A guided walkthrough of the main features. All steps assume the full stack is running at `http://localhost:8080`.
-
-### 1. Live fleet map
-
-Open `http://localhost:8080`. You will see 20 vehicle pins spread across Paris, each moving independently at 1 Hz. Positions flow from 20 Kuksa Databrokers through MQTT to the Rust backend, then over a WebSocket to the browser — no polling.
-
-### 2. Vehicle detail
-
-Click any pin to open the side drawer. It shows the vehicle's VIN, manufacturer, model, and current software version. This data is loaded once via `GET /fleet` on page load; the drawer requires no additional request.
-
-### 3. Fleet table and filters
-
-Switch to the Fleet tab to see all 20 vehicles in a sortable table. Applying a filter also updates which pins are visible on the map, so both views stay in sync.
-
-### 4. OTA update campaign
-
-Open the Campaign panel (the update icon in the toolbar).
-
-1. Select a target software version from the dropdown (populated by `GET /versions`).
-2. Check the vehicles you want to update, or leave all 20 selected.
-3. Click **Launch**. The campaign card appears immediately.
-
-Each vehicle progresses through its own state machine:
-
-```
-Pending  →  Downloading  →  Installing  →  Complete
-                                        ↘  Failed
-```
-
-A 20% simulated failure rate means some vehicles will fail, showing realistic error handling rather than a guaranteed happy path. State chips on the campaign card update live via WebSocket.
-
-### 5. Updated software version
-
-Once a vehicle reaches **Complete**, click its map pin. The software version in the drawer reflects the newly installed version, read from the campaign state.
-
-### 6. API explorer
-
-Visit `http://localhost:3000/docs` for the Swagger UI. All REST endpoints are documented and executable from the browser — useful for showing the clean API surface and the OpenAPI spec generated directly from the Rust source.
-
----
-
 ## Architecture
 
 ```
