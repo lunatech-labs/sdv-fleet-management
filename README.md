@@ -20,7 +20,7 @@ docker compose up
 
 Then visit: `http://localhost:8080`.
 
-> **First run note:** HawkBit takes 60 to 90 seconds to initialise on first boot. The frontend will display vehicles as soon as the backend is ready, but the Campaign panel requires HawkBit to be healthy before a rollout can be launched.
+For first-run timing notes and a pre-demo checklist, see [DEMO.md](DEMO.md).
 
 ---
 
@@ -87,8 +87,10 @@ The Mosquitto broker mounts its config file from `./mosquitto/mosquitto.conf` as
 
 ### Infrastructure
 
+Start only the infrastructure services (replace the range manually, or use `docker compose up` to start everything):
+
 ```sh
-docker compose up mosquitto databroker-01 ... databroker-20
+docker compose up mosquitto databroker-01 databroker-02 # ... through databroker-20
 ```
 
 ```sh
@@ -244,7 +246,7 @@ npm run lint
 npm test
 ```
 
-Runs automatically on every push to `main` via GitHub Actions (`.github/workflows/frontend.yml`).
+Both steps run automatically on every push to `main` via GitHub Actions (`.github/workflows/frontend.yml`).
 
 ### End-to-end tests (Playwright)
 
@@ -276,3 +278,14 @@ npm test
 | Rust backend | 3000 |
 | Eclipse HawkBit | 8083 |
 | Frontend | 8080 |
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| Campaign panel shows an error | HawkBit is still initialising -- wait 60 to 90 seconds and retry |
+| No pins on the map | Backend is not yet ready -- check `curl http://localhost:3000/health` |
+| Pins are not moving | Sidecars may not have started -- run `docker compose logs -f kuksa2mqtt-01` |
+| Port conflict | Check nothing else is on ports 8080, 3000, 1883, or 8083 |
