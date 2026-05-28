@@ -6,29 +6,26 @@ A step-by-step reference for running the SDV Fleet Management demo live.
 
 ## Before the demo
 
+If you haven't cloned and configured the repo yet, follow the [Quickstart](README.md#quickstart) first.
+
 Run these steps at least a few minutes before presenting.
 
-**1. Copy the env file if you haven't already:**
-```sh
-cp .env.example .env
-```
-
-**2. Pre-pull images to avoid slow downloads during startup:**
+**1. Pre-pull images to avoid slow downloads during startup:**
 ```sh
 docker compose pull
 ```
 
-**3. Start the full stack:**
+**2. Start the full stack:**
 ```sh
 docker compose up --build
 ```
 
-**4. Wait for HawkBit to be ready** (60 to 90 seconds on first boot). Watch for this log line:
+**3. Wait for HawkBit to be ready** (60 to 90 seconds on first boot). Watch for this log line:
 ```
 hawkbit  | Started HawkbitServerApp
 ```
 
-**5. Verify the stack is up:**
+**4. Verify the stack is up:**
 ```sh
 curl http://localhost:3000/health        # should return 200
 open http://localhost:8080               # frontend
@@ -63,7 +60,7 @@ Positions flow from 20 Kuksa Databrokers through MQTT to the Rust backend, then 
 
 ### 2. Vehicle detail drawer
 
-Click any pin to open the detail drawer on the left. It shows the vehicle name, VIN, manufacturer, model, current software version, live coordinates, and OTA status chip.
+Click any pin to open the detail drawer on the left. It shows the vehicle name, VIN, brand, model, current software version, live coordinates, and OTA status chip.
 
 ![Vehicle detail drawer](docs/screenshots/car_modal.png)
 
@@ -132,33 +129,10 @@ Switch to `http://localhost:3000/docs` (Swagger UI). All REST endpoints are docu
 
 Open a terminal alongside the browser to show raw data flowing through the stack.
 
-**MQTT telemetry from a single vehicle:**
-```sh
-mqtt sub -h localhost -p 1883 --topic='kuksa/VIN-0001/telemetry/#'
-```
-
-**Backend REST:**
-```sh
-curl -s http://localhost:3000/fleet | jq '.[0]'
-```
-
-**WebSocket position stream:**
-```sh
-websocat ws://localhost:3000/ws/fleet
-```
-
-**WebSocket OTA state stream (launch a campaign first):**
-```sh
-websocat ws://localhost:3000/ws/campaigns
-```
+For the full list of verification commands, see [Testing](README.md#testing) in the README.
 
 ---
 
 ## Troubleshooting
 
-| Symptom | Fix |
-|---|---|
-| Campaign panel shows an error | HawkBit is still initialising -- wait 60 to 90 seconds and retry |
-| No pins on the map | Backend is not yet ready -- check `curl http://localhost:3000/health` |
-| Pins are not moving | Sidecars may not have started -- run `docker compose logs -f kuksa2mqtt-01` |
-| Port conflict | Check nothing else is on ports 8080, 3000, 1883, or 8083 |
+For common startup issues, see [Troubleshooting](README.md#troubleshooting) in the README.
