@@ -38,7 +38,10 @@ volumes:
 # Shared by every vehicle's OTA agent. build + image together so BuildKit builds
 # the image once and the other agents reuse it instead of pulling from a registry.
 x-ota-agent-defaults: &ota-agent-defaults
-  build: ./ota-agent
+  # Built from the repository root so proto/ is shared with the backend.
+  build:
+    context: .
+    dockerfile: ota-agent/Dockerfile
   image: ota-agent:local
   networks:
     - fms-vehicle
@@ -48,6 +51,10 @@ x-ota-agent-defaults: &ota-agent-defaults
     # HawkBit is healthy so the first request doesn't have to burn retries.
     hawkbit:
       condition: service_healthy
+    fms-zenoh-router:
+      condition: service_started
+  volumes:
+    - ./config/zenoh/config-client.json5:/zenoh-config.json5:ro
   environment: &ota-agent-env
     HAWKBIT_URL: http://hawkbit:8080
     HAWKBIT_GATEWAY_TOKEN: ${HAWKBIT_GATEWAY_TOKEN:-fleet-demo-gateway-token}
@@ -301,7 +308,10 @@ services:
 
   # ── Operator backend and UI ────────────────────────────────────────────────
   backend:
-    build: ./backend
+    # Built from the repository root so proto/ is shared with the OTA agent.
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     networks:
       - fms-backend
     ports:
@@ -317,12 +327,15 @@ services:
       RUST_LOG: "info,backend=debug"
     volumes:
       - ./seed/vehicles.json:/app/vehicles.json:ro
+      - ./config/zenoh/config-client.json5:/zenoh-config.json5:ro
       - influxdb-auth:/tmp:ro
     depends_on:
       influxdb:
         condition: service_healthy
       hawkbit:
         condition: service_healthy
+      fms-zenoh-router:
+        condition: service_started
 
   frontend:
     build:

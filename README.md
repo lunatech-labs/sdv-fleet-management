@@ -69,6 +69,16 @@ python3 csv-provider/generate_vehicle_recordings.py --vehicles 3
 
 Outputs `csv-provider/vehicles/<VIN>.csv`, which docker-compose mounts into each CSV Provider. Re-run it after changing `seed/vehicles.json`.
 
+### OTA state over uProtocol
+
+The in-vehicle agent reports every transition (Pending, Downloading, Installing, Complete, Failed) to the back end as a uProtocol Notification, addressed from `up://<VIN>/D102/1/0` to `up://fms-ota-orchestrator/D103/1/0`. The contract is `proto/ota/v1/ota.proto`, shared by both crates.
+
+The agent still drives HawkBit's DDI API over HTTP; only the reporting path runs over uProtocol. The HawkBit Management API poll remains as reconciliation. To confirm the notification path alone drives a rollout:
+
+```sh
+docker compose run --rm -e HAWKBIT_RECONCILE_ENABLED=false -p 3001:3000 backend
+```
+
 ### Gateway token
 
 The in-vehicle OTA agents authenticate to HawkBit's DDI API with a gateway token. It is deployment configuration (`HAWKBIT_GATEWAY_TOKEN`), shared by the agents and the backend, which provisions that exact value on HawkBit's DEFAULT tenant at startup. Both sides can therefore start in any order; agents retry until the backend has provisioned it.
@@ -87,7 +97,7 @@ The `x-databroker-defaults`, `x-csv-provider-defaults`, `x-forwarder-defaults`, 
 
 ### BuildKit deduplication
 
-All OTA agent services share the same `build: ./ota-agent` and `image: ota-agent:local`. BuildKit builds the image once even though every agent declares it. The `image:` tag is also what stops Docker trying to pull `ota-agent:local` from Docker Hub on first run.
+All OTA agent services share the same build (context `.`, dockerfile `ota-agent/Dockerfile`) and `image: ota-agent:local`. The context is the repository root so `proto/` is shared with the backend; `.dockerignore` keeps it small. BuildKit builds the image once even though every agent declares it. The `image:` tag is also what stops Docker trying to pull `ota-agent:local` from Docker Hub on first run.
 
 ```sh
 docker compose build ota-agent-01

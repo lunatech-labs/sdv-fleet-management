@@ -1,0 +1,15 @@
+# The Rust crates build from the repository root so they can share proto/.
+# Without this the context would drag in every build artifact and dependency
+# tree in the repo.
+**/target/
+**/node_modules/
+**/dist/
+**/.venv/
+**/__pycache__/
+**/.pytest_cache/
+.git/
+e2e/
+frontend/
+docs/
+*.md
+.env

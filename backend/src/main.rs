@@ -36,6 +36,7 @@ mod campaign;
 mod hawkbit;
 mod influx;
 mod models;
+mod ota_listener;
 mod store;
 
 use api::{campaigns, fleet, ws};
@@ -200,8 +201,33 @@ async fn main() {
     // via `poll_campaign_state` below.
     tokio::spawn(influx::run(influx_config, store, tx));
 
-    // ── HawkBit DDI reconciliation (background task) ─────────────────────────
-    tokio::spawn(poll_campaign_state(hawkbit.clone(), campaigns, campaign_tx));
+    // ── OTA notifications over uProtocol ─────────────────────────────────────
+    // The transport must outlive this scope: dropping it deregisters the
+    // listener. A failure here is not fatal — poll_campaign_state below still
+    // reconciles against HawkBit, just with higher latency.
+    let _ota_transport = match ota_listener::start(
+        ota_listener::OtaListenerConfig::from_env(),
+        campaigns.clone(),
+        campaign_tx.clone(),
+    )
+    .await
+    {
+        Ok(transport) => Some(transport),
+        Err(e) => {
+            warn!("OTA notifications over uProtocol unavailable: {e}");
+            None
+        }
+    };
+
+    // ── HawkBit reconciliation (background task) ─────────────────────────────
+    // Repairs anything a dropped uProtocol notification would leave stale, and
+    // rehydrates state after a restart. Can be switched off to verify that the
+    // notification path alone drives a campaign to completion.
+    if env::var("HAWKBIT_RECONCILE_ENABLED").as_deref() != Ok("false") {
+        tokio::spawn(poll_campaign_state(hawkbit.clone(), campaigns, campaign_tx));
+    } else {
+        warn!("HawkBit reconciliation disabled; campaign state comes only from uProtocol");
+    }
 
     // ── Axum router ───────────────────────────────────────────────────────────
     let app = build_router(state);

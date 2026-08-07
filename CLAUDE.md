@@ -36,8 +36,9 @@ RUST_LOG=backend=debug cargo run    # needs INFLUXDB_*, HAWKBIT_* env
 cd ota-agent
 cargo check
 cargo build
-# Proto files in proto/kuksa/val/v1/ are compiled by build.rs via tonic-build.
-# protobuf-compiler must be installed: apt-get install protobuf-compiler
+# proto/kuksa/val/v1/ is compiled by build.rs via tonic-build (prost), and the
+# shared ../proto/ota/v1/ota.proto via rust-protobuf. protobuf-compiler must be
+# installed for the former: apt-get install protobuf-compiler
 ```
 
 **Frontend** (`frontend/` — Vue 3/Vite):
@@ -75,6 +76,8 @@ CSV Provider (×3)  →  Kuksa Databroker (×3, gRPC, port 55556 in-container)
 
 OTA:  backend  →  HawkBit Management API (rollouts)  →  HawkBit (port 8083)
       ota-agent (×3)  →  HawkBit DDI poll loop  →  gRPC Set Vehicle.SoftwareVersion
+      ota-agent (×3)  →  uProtocol Notification  →  backend
+                         up://<VIN>/D102/1/0 -> up://fms-ota-orchestrator/D103/1/0
 ```
 
 ## Key design decisions
@@ -85,7 +88,15 @@ OTA:  backend  →  HawkBit Management API (rollouts)  →  HawkBit (port 8083)
 
 **The gateway token is deployment config, not a runtime hand-off.** Both the backend and the agents read `HAWKBIT_GATEWAY_TOKEN`; the backend provisions that exact value on HawkBit's DEFAULT tenant at startup. This replaced a retained-MQTT broadcast and is why the stack no longer needs a broker. Agents may log `401` until the backend has provisioned it, and retry.
 
-**BuildKit deduplicates the OTA agent build.** All agents declare `build: ./ota-agent` and `image: ota-agent:local` via the shared YAML anchor. BuildKit builds once; the `image:` tag prevents Docker pulling `ota-agent:local` from Docker Hub.
+**OTA state reaches the back end as uProtocol Notifications.** The agent sends one on every transition (`ota-agent/src/uprotocol.rs`), addressed to the orchestrator; `backend/src/ota_listener.rs` receives them and drives `CampaignStore`. A Notification has a single distinct addressee, which suits a status report better than a Publish. The HawkBit Management API poll stays as reconciliation, repairing anything a dropped notification leaves stale and rehydrating after a restart. Set `HAWKBIT_RECONCILE_ENABLED=false` to verify the notification path alone drives a campaign to completion.
+
+**The agent still speaks DDI over HTTP.** Only reporting runs over uProtocol. A full uProtocol-to-DDI bridge would need a cloud-to-vehicle channel, and upstream `up-transport-hono-kafka::send()` is `UNIMPLEMENTED` while the Hono MQTT transport only implements `send`, so a bridge would be Zenoh-only.
+
+**The OTA contract is compiled twice, with different codegen.** `proto/ota/v1/ota.proto` is shared by both crates and compiled with rust-protobuf, because up-rust's `UPayload` conversions need `protobuf::Message`; the agent's Kuksa protos stay on prost/tonic for gRPC. Both crates therefore build from the repository root (see `.dockerignore`).
+
+**Notifications are correlated to campaigns by VIN, not action id.** The agent reports `(vin, action_id)`; the dashboard is organised by campaign, and HawkBit action ids are not tracked. `CampaignStore::active_campaign_for_vin` picks the most recent non-terminal campaign containing that VIN.
+
+**BuildKit deduplicates the OTA agent build.** All agents declare the same build (context `.`, dockerfile `ota-agent/Dockerfile`) and `image: ota-agent:local` via the shared YAML anchor. BuildKit builds once; the `image:` tag prevents Docker pulling `ota-agent:local` from Docker Hub.
 
 **Backend store is pre-populated at startup.** `main.rs` reads `seed/vehicles.json` (mounted read-only) and inserts a `VehicleRecord` per vehicle before ingest starts, so `GET /fleet` returns data immediately and `update_position` always finds a matching VIN. Positions for a VIN not in that file are ignored. `software_version` comes only from this seed file.
 

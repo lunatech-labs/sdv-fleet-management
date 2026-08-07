@@ -91,6 +91,28 @@ impl CampaignStore {
         self.0.iter().map(|c| c.clone()).collect()
     }
 
+    /// Find the campaign in which `vin` is still being updated.
+    ///
+    /// OTA notifications from the vehicle carry a VIN and a HawkBit action id
+    /// but no campaign, so this is how an incoming transition is attributed. A
+    /// vehicle only ever has one campaign in flight, but restarts can leave
+    /// several historical ones, so terminal states are skipped and the most
+    /// recently created match wins.
+    pub fn active_campaign_for_vin(&self, vin: &str) -> Option<CampaignId> {
+        self.0
+            .iter()
+            .filter(|c| {
+                c.vehicles.get(vin).is_some_and(|s| {
+                    !matches!(
+                        s,
+                        VehicleUpdateState::Complete { .. } | VehicleUpdateState::Failed { .. }
+                    )
+                })
+            })
+            .max_by_key(|c| c.created)
+            .map(|c| c.id)
+    }
+
     /// Update a single vehicle's state inside a campaign. Returns the new state
     /// if the campaign and VIN exist, so the caller can broadcast a transition.
     pub fn set_vehicle_state(

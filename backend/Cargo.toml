@@ -34,9 +34,20 @@ utoipa              = { version = "4", features = ["axum_extras", "chrono", "uui
 utoipa-swagger-ui   = { version = "6", features = ["axum"] }
 reqwest             = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 uuid                = { version = "1", features = ["v4", "serde"] }
+
+# uProtocol: receives OTA state transitions from the in-vehicle agents.
+up-rust             = { version = "0.4.0", default-features = false, features = ["communication"] }
+up-transport-zenoh  = "0.5.0"
+zenoh               = { version = "1.2.1", default-features = false }
+protobuf            = "3.7.2"
+async-trait         = "0.1"
+
 thiserror           = "1"
 tracing             = "0.1"
 tracing-subscriber  = { version = "0.3", features = ["env-filter"] }
+
+[build-dependencies]
+protobuf-codegen    = "3.7.2"
 
 [dev-dependencies]
 tower             = { version = "0.4", features = ["util"] }

@@ -20,8 +20,11 @@
 FROM rust:1.93-slim AS builder
 
 WORKDIR /app
-COPY Cargo.toml Cargo.lock* ./
-COPY src ./src
+# Built from the repository root so proto/ is shared with the OTA agent.
+COPY backend/Cargo.toml backend/Cargo.lock* ./
+COPY backend/build.rs ./
+COPY backend/src ./src
+COPY proto /proto
 
 RUN cargo build --release
 
