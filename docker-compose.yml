@@ -1,442 +1,259 @@
-# build + image together: BuildKit deduplicates the build across all 20 sidecars
-# and tags the result as kuksa2mqtt:local, preventing a Docker Hub pull on first run.
-x-sidecar-defaults: &sidecar-defaults
-  build: ./kuksa2mqtt
-  image: kuksa2mqtt:local
-  depends_on:
-    mosquitto:
-      condition: service_healthy
-    seed:
-      condition: service_completed_successfully
-  restart: on-failure
+# SPDX-FileCopyrightText: 2026 Contributors to the Eclipse Foundation
+#
+# See the NOTICE file(s) distributed with this work for additional
+# information regarding copyright ownership.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+#
+# Telemetry follows the Eclipse SDV Fleet Management blueprint: a CSV Provider
+# replays a recording into a per-vehicle Kuksa Databroker, an FMS Forwarder
+# publishes VehicleStatus over uProtocol (Zenoh transport), and the FMS Consumer
+# writes it to InfluxDB. Our backend reads the fleet state back out of InfluxDB.
+#
+# The OTA flow is the part that is additive to the blueprint: HawkBit plus an
+# in-vehicle OTA agent per vehicle.
 
-# Same BuildKit dedup pattern as x-sidecar-defaults, one image shared by 20 agents.
+networks:
+  fms-backend:
+  fms-vehicle:
+
+volumes:
+  influxdb-data:
+  influxdb-config:
+  influxdb-auth:
+  influxdb-datasources:
+
+# Shared by every vehicle's OTA agent. build + image together so BuildKit builds
+# the image once and the other agents reuse it instead of pulling from a registry.
 x-ota-agent-defaults: &ota-agent-defaults
   build: ./ota-agent
   image: ota-agent:local
+  networks:
+    - fms-vehicle
+    - fms-backend
   depends_on:
-    mosquitto:
-      condition: service_healthy
     # ota-agents self-register against HawkBit DDI on startup — wait until
     # HawkBit is healthy so the first request doesn't have to burn retries.
     hawkbit:
       condition: service_healthy
+  environment: &ota-agent-env
+    HAWKBIT_URL: http://hawkbit:8080
+    HAWKBIT_GATEWAY_TOKEN: ${HAWKBIT_GATEWAY_TOKEN:-fleet-demo-gateway-token}
+    KUKSA_PORT: "55556"
+    FAILURE_RATE: "0.2"
+    DOWNLOAD_DELAY_SECS: "5"
+    INSTALL_DELAY_SECS: "3"
   restart: on-failure
+
+x-databroker-defaults: &databroker-defaults
+  image: quay.io/eclipse-kuksa/kuksa-databroker:0.6.0
+  networks:
+    - fms-vehicle
+  volumes:
+    - ./spec/overlay/vss.json:/vss_overlay.json:ro
+  environment:
+    KUKSA_DATABROKER_ADDR: "0.0.0.0"
+    KUKSA_DATABROKER_PORT: "55556"
+    KUKSA_DATABROKER_METADATA_FILE: /vss_overlay.json
+    RUST_LOG: info
+  # for the time being, we do not use TLS secured connections to the Databroker
+  command: "--insecure"
+
+x-csv-provider-defaults: &csv-provider-defaults
+  image: quay.io/eclipse-kuksa/csv-provider:0.4.5
+  networks:
+    - fms-vehicle
+  environment: &csv-provider-env
+    PROVIDER_INFINITE: 1
+    PROVIDER_LOG_LEVEL: INFO
+    KUKSA_DATA_BROKER_PORT: "55556"
+
+x-forwarder-defaults: &forwarder-defaults
+  image: ghcr.io/eclipse-sdv-blueprints/fleet-management/fms-forwarder:main
+  networks:
+    - fms-vehicle
+    - fms-backend
+  command: "zenoh -c /zenoh-config.json5"
+  volumes:
+    - ./config/zenoh/config-client.json5:/zenoh-config.json5:ro
+  depends_on:
+    fms-zenoh-router:
+      condition: service_started
+  environment: &forwarder-env
+    TIMER_INTERVAL: "500ms"
+    RUST_LOG: "info,fms_forwarder=info"
 
 services:
 
-  # ── MQTT broker ────────────────────────────────────────────────────────────
-  mosquitto:
-    image: eclipse-mosquitto:2
+  # ── uProtocol transport ────────────────────────────────────────────────────
+  fms-zenoh-router:
+    image: eclipse/zenoh:1.1.0
+    container_name: fms-zenoh-router
+    command: -c /zenoh-config.json5
+    environment:
+      RUST_LOG: zenoh=info
+    networks:
+      - fms-backend
+      - fms-vehicle
     ports:
-      - "1883:1883"
+      - "127.0.0.1:7447:7447/tcp"
     volumes:
-      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
-    healthcheck:
-      test: ["CMD-SHELL", "mosquitto_sub -t '$$SYS/#' -C 1 -i healthcheck -W 3"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
+      - ./config/zenoh/config-router.json5:/zenoh-config.json5:ro
+    restart: unless-stopped
 
-  # ── Kuksa Databrokers (one per vehicle) ────────────────────────────────────
+  # ── Telemetry store ────────────────────────────────────────────────────────
+  influxdb:
+    image: docker.io/library/influxdb:2.7
+    container_name: influxDB
+    command: influxd
+    networks:
+      - fms-backend
+    ports:
+      - "127.0.0.1:8086:8086"
+    env_file: ./influxdb/fms-demo.env
+    environment:
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: fms-demo
+      DOCKER_INFLUXDB_INIT_PASSWORD: fms-demo-secret
+      DOCKER_INFLUXDB_INIT_RETENTION: 1w
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: fms-backend-admin-token
+    healthcheck:
+      test: ["CMD-SHELL", "influx ping"]
+      interval: 5s
+      timeout: 3s
+      start_period: 5s
+    volumes:
+      - ./influxdb/init-scripts/create-fms-token.sh:/docker-entrypoint-initdb.d/influxdb_init.sh:ro
+      - influxdb-data:/var/lib/influxdb2
+      - influxdb-config:/etc/influxdb2
+      - influxdb-auth:/tmp/out
+      # The init script also emits a Grafana datasource definition. We do not run
+      # Grafana, but the script runs under `set -e`, so the target must exist.
+      - influxdb-datasources:/tmp/influxdb-datasources
+
+  fms-consumer:
+    image: ghcr.io/eclipse-sdv-blueprints/fleet-management/fms-consumer:main
+    container_name: fms-consumer
+    # Upstream publishes fms-consumer for linux/amd64 only (fms-forwarder is the
+    # only multi-arch image), so this runs under emulation on arm64 hosts.
+    platform: linux/amd64
+    command: "zenoh -c /zenoh-config.json5"
+    networks:
+      - fms-backend
+    depends_on:
+      influxdb:
+        condition: service_healthy
+      fms-zenoh-router:
+        condition: service_started
+    env_file: ./influxdb/fms-demo.env
+    environment:
+      INFLUXDB_TOKEN_FILE: /tmp/fms-demo.token
+      RUST_LOG: "info,fms_consumer=debug,influx_client=debug"
+    volumes:
+      - ./config/zenoh/config-client.json5:/zenoh-config.json5:ro
+      - influxdb-auth:/tmp:ro
+
+  # ── Vehicles ───────────────────────────────────────────────────────────────
   databroker-01:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55556:55555"]
+    <<: *databroker-defaults
+    ports: ["127.0.0.1:55556:55556"]
 
   databroker-02:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55557:55555"]
+    <<: *databroker-defaults
+    ports: ["127.0.0.1:55557:55556"]
 
   databroker-03:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55558:55555"]
+    <<: *databroker-defaults
+    ports: ["127.0.0.1:55558:55556"]
 
-  databroker-04:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55559:55555"]
-
-  databroker-05:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55560:55555"]
-
-  databroker-06:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55561:55555"]
-
-  databroker-07:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55562:55555"]
-
-  databroker-08:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55563:55555"]
-
-  databroker-09:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55564:55555"]
-
-  databroker-10:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55565:55555"]
-
-  databroker-11:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55566:55555"]
-
-  databroker-12:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55567:55555"]
-
-  databroker-13:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55568:55555"]
-
-  databroker-14:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55569:55555"]
-
-  databroker-15:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55570:55555"]
-
-  databroker-16:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55571:55555"]
-
-  databroker-17:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55572:55555"]
-
-  databroker-18:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55573:55555"]
-
-  databroker-19:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55574:55555"]
-
-  databroker-20:
-    image: ghcr.io/eclipse-kuksa/kuksa-databroker:latest
-    command: ["--insecure"]
-    ports: ["55575:55555"]
-
-  # ── Seed script ────────────────────────────────────────────────────────────
-  # Connects to each databroker and writes static VSS signals + initial GPS.
-  # Retries gRPC connections internally; exits 0 on success.
-  seed:
-    build: ./seed
-    depends_on:
-      - databroker-01
-      - databroker-02
-      - databroker-03
-      - databroker-04
-      - databroker-05
-      - databroker-06
-      - databroker-07
-      - databroker-08
-      - databroker-09
-      - databroker-10
-      - databroker-11
-      - databroker-12
-      - databroker-13
-      - databroker-14
-      - databroker-15
-      - databroker-16
-      - databroker-17
-      - databroker-18
-      - databroker-19
-      - databroker-20
-    restart: "no"
-
-  # ── kuksa2mqtt sidecars (one per vehicle) ──────────────────────────────────
-  kuksa2mqtt-01:
-    <<: *sidecar-defaults
+  csv-provider-01:
+    <<: *csv-provider-defaults
+    depends_on: { databroker-01: { condition: service_started } }
+    volumes: ["./csv-provider/vehicles/VIN-0001.csv:/dist/signals.csv:ro"]
     environment:
+      <<: *csv-provider-env
+      KUKSA_DATA_BROKER_ADDR: databroker-01
+
+  csv-provider-02:
+    <<: *csv-provider-defaults
+    depends_on: { databroker-02: { condition: service_started } }
+    volumes: ["./csv-provider/vehicles/VIN-0002.csv:/dist/signals.csv:ro"]
+    environment:
+      <<: *csv-provider-env
+      KUKSA_DATA_BROKER_ADDR: databroker-02
+
+  csv-provider-03:
+    <<: *csv-provider-defaults
+    depends_on: { databroker-03: { condition: service_started } }
+    volumes: ["./csv-provider/vehicles/VIN-0003.csv:/dist/signals.csv:ro"]
+    environment:
+      <<: *csv-provider-env
+      KUKSA_DATA_BROKER_ADDR: databroker-03
+
+  # Each forwarder publishes on its own uProtocol authority so the consumer can
+  # tell the vehicles apart; fms-consumer subscribes to up://*/D100/1/D100.
+  fms-forwarder-01:
+    <<: *forwarder-defaults
+    environment:
+      <<: *forwarder-env
+      KUKSA_DATABROKER_URI: http://databroker-01:55556
+      TOPIC: up://VIN-0001/D100/1/D100
+
+  fms-forwarder-02:
+    <<: *forwarder-defaults
+    environment:
+      <<: *forwarder-env
+      KUKSA_DATABROKER_URI: http://databroker-02:55556
+      TOPIC: up://VIN-0002/D100/1/D100
+
+  fms-forwarder-03:
+    <<: *forwarder-defaults
+    environment:
+      <<: *forwarder-env
+      KUKSA_DATABROKER_URI: http://databroker-03:55556
+      TOPIC: up://VIN-0003/D100/1/D100
+
+  ota-agent-01:
+    <<: *ota-agent-defaults
+    environment:
+      <<: *ota-agent-env
+      VEHICLE_VIN: VIN-0001
       KUKSA_HOST: databroker-01
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0001
-      VEHICLE_BRAND: Toyota
-      VEHICLE_MODEL: Camry
-      VEHICLE_LAT:   "48.8566"
-      VEHICLE_LON:   "2.3522"
 
-  kuksa2mqtt-02:
-    <<: *sidecar-defaults
+  ota-agent-02:
+    <<: *ota-agent-defaults
     environment:
+      <<: *ota-agent-env
+      VEHICLE_VIN: VIN-0002
       KUKSA_HOST: databroker-02
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0002
-      VEHICLE_BRAND: Ford
-      VEHICLE_MODEL: Mustang
-      VEHICLE_LAT:   "48.8601"
-      VEHICLE_LON:   "2.3488"
 
-  kuksa2mqtt-03:
-    <<: *sidecar-defaults
+  ota-agent-03:
+    <<: *ota-agent-defaults
     environment:
+      <<: *ota-agent-env
+      VEHICLE_VIN: VIN-0003
       KUKSA_HOST: databroker-03
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0003
-      VEHICLE_BRAND: Renault
-      VEHICLE_MODEL: Clio
-      VEHICLE_LAT:   "48.8635"
-      VEHICLE_LON:   "2.3310"
 
-  kuksa2mqtt-04:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-04
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0004
-      VEHICLE_BRAND: Peugeot
-      VEHICLE_MODEL: Bipper
-      VEHICLE_LAT:   "48.8502"
-      VEHICLE_LON:   "2.3451"
-
-  kuksa2mqtt-05:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-05
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0005
-      VEHICLE_BRAND: Volkswagen
-      VEHICLE_MODEL: Golf
-      VEHICLE_LAT:   "48.8450"
-      VEHICLE_LON:   "2.3700"
-
-  kuksa2mqtt-06:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-06
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0006
-      VEHICLE_BRAND: Mercedes
-      VEHICLE_MODEL: Sprinter
-      VEHICLE_LAT:   "48.8710"
-      VEHICLE_LON:   "2.3410"
-
-  kuksa2mqtt-07:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-07
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0007
-      VEHICLE_BRAND: Audi
-      VEHICLE_MODEL: A4
-      VEHICLE_LAT:   "48.8678"
-      VEHICLE_LON:   "2.3156"
-
-  kuksa2mqtt-08:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-08
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0008
-      VEHICLE_BRAND: "Citroën"
-      VEHICLE_MODEL: Berlingo
-      VEHICLE_LAT:   "48.8530"
-      VEHICLE_LON:   "2.2980"
-
-  kuksa2mqtt-09:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-09
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0009
-      VEHICLE_BRAND: Nissan
-      VEHICLE_MODEL: Leaf
-      VEHICLE_LAT:   "48.8820"
-      VEHICLE_LON:   "2.3600"
-
-  kuksa2mqtt-10:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-10
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0010
-      VEHICLE_BRAND: Tesla
-      VEHICLE_MODEL: "Model 3"
-      VEHICLE_LAT:   "48.8750"
-      VEHICLE_LON:   "2.2890"
-
-  kuksa2mqtt-11:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-11
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0011
-      VEHICLE_BRAND: BMW
-      VEHICLE_MODEL: 320i
-      VEHICLE_LAT:   "48.8470"
-      VEHICLE_LON:   "2.3210"
-
-  kuksa2mqtt-12:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-12
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0012
-      VEHICLE_BRAND: Honda
-      VEHICLE_MODEL: Civic
-      VEHICLE_LAT:   "48.8390"
-      VEHICLE_LON:   "2.3550"
-
-  kuksa2mqtt-13:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-13
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0013
-      VEHICLE_BRAND: Hyundai
-      VEHICLE_MODEL: "Ioniq 5"
-      VEHICLE_LAT:   "48.8610"
-      VEHICLE_LON:   "2.4010"
-
-  kuksa2mqtt-14:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-14
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0014
-      VEHICLE_BRAND: Kia
-      VEHICLE_MODEL: EV6
-      VEHICLE_LAT:   "48.8340"
-      VEHICLE_LON:   "2.3380"
-
-  kuksa2mqtt-15:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-15
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0015
-      VEHICLE_BRAND: Volvo
-      VEHICLE_MODEL: XC40
-      VEHICLE_LAT:   "48.8900"
-      VEHICLE_LON:   "2.3120"
-
-  kuksa2mqtt-16:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-16
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0016
-      VEHICLE_BRAND: Stellantis
-      VEHICLE_MODEL: e-208
-      VEHICLE_LAT:   "48.8420"
-      VEHICLE_LON:   "2.4100"
-
-  kuksa2mqtt-17:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-17
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0017
-      VEHICLE_BRAND: Fiat
-      VEHICLE_MODEL: 500e
-      VEHICLE_LAT:   "48.8560"
-      VEHICLE_LON:   "2.4200"
-
-  kuksa2mqtt-18:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-18
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0018
-      VEHICLE_BRAND: Subaru
-      VEHICLE_MODEL: Outback
-      VEHICLE_LAT:   "48.8780"
-      VEHICLE_LON:   "2.4050"
-
-  kuksa2mqtt-19:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-19
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0019
-      VEHICLE_BRAND: Mazda
-      VEHICLE_MODEL: CX-5
-      VEHICLE_LAT:   "48.8310"
-      VEHICLE_LON:   "2.2800"
-
-  kuksa2mqtt-20:
-    <<: *sidecar-defaults
-    environment:
-      KUKSA_HOST: databroker-20
-      KUKSA_PORT: "55555"
-      MQTT_HOST: mosquitto
-      MQTT_PORT: "1883"
-      VEHICLE_VIN:   VIN-0020
-      VEHICLE_BRAND: BMW
-      VEHICLE_MODEL: X5
-      VEHICLE_LAT:   "48.8710"
-      VEHICLE_LON:   "2.4150"
-
-  # ── Postgres (HawkBit's persistence backend) ───────────────────────────────
-  # Replaces the default H2 in-memory DB, which is incompatible with recent
-  # H2 releases that removed CALL IDENTITY(). No volume is mounted: campaign
-  # history is still wiped on `docker compose down` (demo only).
+  # ── OTA campaign orchestration ─────────────────────────────────────────────
   postgres:
     image: postgres:18-alpine
+    networks:
+      - fms-backend
     environment:
-      POSTGRES_DB:       hawkbit
-      POSTGRES_USER:     hawkbit
+      POSTGRES_DB: hawkbit
+      POSTGRES_USER: hawkbit
       POSTGRES_PASSWORD: hawkbit
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U hawkbit -d hawkbit"]
@@ -444,266 +261,77 @@ services:
       timeout: 3s
       retries: 10
 
-  # ── Eclipse HawkBit (OTA campaign store) ───────────────────────────────────
   hawkbit:
-    image: hawkbit/hawkbit-update-server:latest
+    image: hawkbit/hawkbit-update-server:1.1.0
+    networks:
+      - fms-backend
     ports:
-      - "8083:8080"
+      - "127.0.0.1:8083:8080"
     environment:
-      SPRING_DATASOURCE_URL:                jdbc:postgresql://postgres:5432/hawkbit
-      SPRING_DATASOURCE_USERNAME:           hawkbit
-      SPRING_DATASOURCE_PASSWORD:           hawkbit
-      SPRING_DATASOURCE_DRIVER_CLASS_NAME:  org.postgresql.Driver
-      SPRING_JPA_DATABASE:                  POSTGRESQL
-      HAWKBIT_TOKEN: ${HAWKBIT_TOKEN}
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/hawkbit
+      SPRING_DATASOURCE_USERNAME: hawkbit
+      SPRING_DATASOURCE_PASSWORD: hawkbit
+      SPRING_DATASOURCE_DRIVER_CLASS_NAME: org.postgresql.Driver
+      SPRING_JPA_DATABASE: POSTGRESQL
+      # The DDI gateway token is tenant configuration, so it is provisioned by
+      # the backend through the Management API on startup rather than set here.
       # Management API user — must match HAWKBIT_USER / HAWKBIT_PASSWORD on the
       # backend service. {noop} tells Spring Security the password is plaintext.
-      HAWKBIT_SERVER_IM_USERS_0_USERNAME:    ${HAWKBIT_USER:-admin}
-      HAWKBIT_SERVER_IM_USERS_0_PASSWORD:    "{noop}${HAWKBIT_PASSWORD:-admin}"
-      HAWKBIT_SERVER_IM_USERS_0_FIRSTNAME:   admin
-      HAWKBIT_SERVER_IM_USERS_0_LASTNAME:    admin
-      HAWKBIT_SERVER_IM_USERS_0_EMAIL:       admin@example.org
+      HAWKBIT_SERVER_IM_USERS_0_USERNAME: ${HAWKBIT_USER:-admin}
+      HAWKBIT_SERVER_IM_USERS_0_PASSWORD: "{noop}${HAWKBIT_PASSWORD:-admin}"
+      HAWKBIT_SERVER_IM_USERS_0_FIRSTNAME: admin
+      HAWKBIT_SERVER_IM_USERS_0_LASTNAME: admin
+      HAWKBIT_SERVER_IM_USERS_0_EMAIL: admin@example.org
       HAWKBIT_SERVER_IM_USERS_0_PERMISSIONS: ALL
     depends_on:
       postgres:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/actuator/health"]
+      # HawkBit 1.1.0 does not expose the Spring actuator, so readiness is probed
+      # against the Management API instead. An unauthenticated request answers
+      # 401 once the app is serving, which is all we need to know here; the image
+      # only has BusyBox wget, which cannot send Basic credentials.
+      test:
+        - CMD-SHELL
+        - "wget -qS --spider http://localhost:8080/rest/v1/targets 2>&1 | grep -qE 'HTTP/1.1 (200|401)'"
       interval: 10s
       timeout: 15s
-      retries: 10
-      start_period: 90s
+      retries: 20
+      start_period: 120s
 
-  # ── ota-agent (one per vehicle) ────────────────────────────────────────────
-  ota-agent-01:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0001
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-01
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-02:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0002
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-02
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-03:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0003
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-03
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-04:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0004
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-04
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-05:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0005
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-05
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-06:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0006
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-06
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-07:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0007
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-07
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-08:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0008
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-08
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-09:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0009
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-09
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-10:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0010
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-10
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-11:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0011
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-11
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-12:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0012
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-12
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-13:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0013
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-13
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-14:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0014
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-14
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-15:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0015
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-15
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-16:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0016
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-16
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-17:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0017
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-17
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-18:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0018
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-18
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-19:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0019
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-19
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  ota-agent-20:
-    <<: *ota-agent-defaults
-    environment:
-      VEHICLE_VIN:         VIN-0020
-      MQTT_HOST:           mosquitto
-      KUKSA_HOST:          databroker-20
-      FAILURE_RATE:        "0.2"
-      DOWNLOAD_DELAY_SECS: "5"
-      INSTALL_DELAY_SECS:  "3"
-
-  # ── Rust backend ───────────────────────────────────────────────────────────
+  # ── Operator backend and UI ────────────────────────────────────────────────
   backend:
     build: ./backend
+    networks:
+      - fms-backend
     ports:
       - "3000:3000"
+    env_file: ./influxdb/fms-demo.env
     environment:
-      MQTT_HOST:     mosquitto
-      MQTT_PORT:     "1883"
+      INFLUXDB_TOKEN_FILE: /tmp/fms-demo.token
       VEHICLES_FILE: /app/vehicles.json
-      HAWKBIT_URL:      http://hawkbit:8080
-      HAWKBIT_USER:     ${HAWKBIT_USER:-admin}
+      HAWKBIT_URL: http://hawkbit:8080
+      HAWKBIT_USER: ${HAWKBIT_USER:-admin}
       HAWKBIT_PASSWORD: ${HAWKBIT_PASSWORD:-admin}
+      HAWKBIT_GATEWAY_TOKEN: ${HAWKBIT_GATEWAY_TOKEN:-fleet-demo-gateway-token}
+      RUST_LOG: "info,backend=debug"
     volumes:
       - ./seed/vehicles.json:/app/vehicles.json:ro
+      - influxdb-auth:/tmp:ro
     depends_on:
-      mosquitto:
+      influxdb:
         condition: service_healthy
-      seed:
-        condition: service_completed_successfully
       hawkbit:
         condition: service_healthy
 
-  # ── Vue 3 frontend ─────────────────────────────────────────────────────────
   frontend:
     build:
       context: ./frontend
-      args:
-        VITE_BACKEND_URL: http://localhost:3000
+    networks:
+      - fms-backend
     ports:
       - "8080:80"
+    environment:
+      BACKEND_URL: ${FRONTEND_BACKEND_URL:-http://localhost:3000}
     depends_on:
       - backend

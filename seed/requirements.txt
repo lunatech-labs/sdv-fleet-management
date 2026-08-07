@@ -1,3 +1,0 @@
-kuksa-client==0.4.3
-pytest==8.3.5
-pytest-mock==3.14.0

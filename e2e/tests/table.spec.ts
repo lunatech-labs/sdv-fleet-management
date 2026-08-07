@@ -1,6 +1,26 @@
-import { test, expect, type Page } from '@playwright/test'
+// SPDX-FileCopyrightText: 2026 Contributors to the Eclipse Foundation
+//
+// See the NOTICE file(s) distributed with this work for additional
+// information regarding copyright ownership.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
 
-const EXPECTED_FLEET_SIZE = 20
+import { test, expect, type Page } from '@playwright/test'
+import { fetchFleetSize } from './fleet-size'
+
+let EXPECTED_FLEET_SIZE = 0
 const MARKER = '.leaflet-marker-icon'
 const BACKEND_URL = process.env.PLAYWRIGHT_BACKEND_URL ?? 'http://localhost:3000'
 
@@ -24,6 +44,10 @@ function filterGroup(page: Page) {
 function groupGroup(page: Page) {
   return page.locator('.control-group').filter({ has: page.locator('label', { hasText: 'Group' }) })
 }
+
+test.beforeAll(async () => {
+  EXPECTED_FLEET_SIZE = await fetchFleetSize()
+})
 
 test.describe('Fleet table', () => {
   test.beforeEach(async ({ page }) => {
@@ -56,7 +80,7 @@ test.describe('Fleet table', () => {
     })
 
     // Content
-    test('displays all 20 vehicles', async ({ page }) => {
+    test('displays every vehicle in the fleet', async ({ page }) => {
       await expect(dataRows(page)).toHaveCount(EXPECTED_FLEET_SIZE)
     })
 
@@ -79,7 +103,8 @@ test.describe('Fleet table', () => {
       test('updates the count badge to show filtered / total', async ({ page, request }) => {
         const fleet: VehicleRecord[] = await request.get(`${BACKEND_URL}/fleet`).then(r => r.json())
         await page.locator('.search').fill(fleet[0].vin)
-        await expect(page.locator('.panel-header .count')).toHaveText(/1\s*\/\s*20/)
+        await expect(page.locator('.panel-header .count'))
+          .toHaveText(new RegExp(`1\\s*/\\s*${EXPECTED_FLEET_SIZE}`))
       })
 
       test('shows the empty state when no vehicles match', async ({ page }) => {

@@ -1,18 +1,36 @@
+// SPDX-FileCopyrightText: 2026 Contributors to the Eclipse Foundation
+//
+// See the NOTICE file(s) distributed with this work for additional
+// information regarding copyright ownership.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 //! Minimal Eclipse HawkBit Management API client.
 //!
 //! HawkBit is the authoritative store for OTA campaign state. This module owns
 //! every request that reads or writes that state. The endpoints, payload shapes,
 //! and response field names here follow the public HawkBit REST documentation
-//! but have not been pinned to a specific HawkBit version — the stack uses the
-//! `hawkbit/hawkbit-update-server:latest` image, so minor drift should be
-//! reconciled at integration time.
+//! but are exercised against the `hawkbit/hawkbit-update-server:1.1.0` image
+//! that docker-compose pins. Bumping that tag may require reconciling drift in
+//! the endpoints or response shapes below.
 
 use std::time::Duration;
 
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
 use tracing::{info, warn};
-use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
 pub enum HawkbitError {
@@ -73,16 +91,20 @@ impl HawkbitClient {
 
     // ── Gateway token (tenant-wide DDI provisioning) ─────────────────────────
 
-    /// Enable gateway-token authentication on HawkBit's DEFAULT tenant and
-    /// return the current token, generating one if the tenant doesn't have a
-    /// key configured yet. Idempotent: safe to call on every backend start.
+    /// Enable gateway-token authentication on HawkBit's DEFAULT tenant and set
+    /// the key to `token`. Idempotent: safe to call on every backend start.
+    ///
+    /// The token is supplied by the deployment (`HAWKBIT_GATEWAY_TOKEN`) rather
+    /// than generated here, so the in-vehicle OTA agents can be configured with
+    /// the same value up front. That removes the runtime hand-off the agents
+    /// previously depended on and lets both sides start in any order.
     ///
     /// With this enabled, any client presenting `Authorization: GatewayToken
     /// <key>` against `/DEFAULT/controller/v1/{vin}` will authenticate and —
     /// if the target doesn't yet exist — HawkBit auto-creates it under
     /// `CONTROLLER_PLUG_AND_PLAY`. This is what makes ota-agent self-
     /// registration work without admin credentials.
-    pub async fn enable_gateway_token(&self) -> Result<String, HawkbitError> {
+    pub async fn enable_gateway_token(&self, token: &str) -> Result<(), HawkbitError> {
         self.put_config(
             "authentication.gatewaytoken.enabled",
             serde_json::json!(true),
@@ -92,14 +114,12 @@ impl HawkbitClient {
         let existing = self
             .get_config_string("authentication.gatewaytoken.key")
             .await?;
-        if !existing.is_empty() {
-            return Ok(existing);
+        if existing == token {
+            return Ok(());
         }
 
-        let token = Uuid::new_v4().to_string();
-        self.put_config("authentication.gatewaytoken.key", serde_json::json!(&token))
-            .await?;
-        Ok(token)
+        self.put_config("authentication.gatewaytoken.key", serde_json::json!(token))
+            .await
     }
 
     async fn get_config_string(&self, key: &str) -> Result<String, HawkbitError> {

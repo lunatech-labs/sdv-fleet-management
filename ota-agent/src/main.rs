@@ -1,12 +1,30 @@
+// SPDX-FileCopyrightText: 2026 Contributors to the Eclipse Foundation
+//
+// See the NOTICE file(s) distributed with this work for additional
+// information regarding copyright ownership.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use std::{env, sync::Arc, time::Duration};
 
 use rand::Rng;
 use reqwest::Client as HttpClient;
-use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS};
 use serde::Deserialize;
 use tokio::{sync::Mutex, time};
 use tonic::transport::Channel;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 pub mod kuksa {
     pub mod val {
@@ -22,8 +40,7 @@ use kuksa::val::v1::{val_client::ValClient, DataEntry, Datapoint, EntryUpdate, F
 
 struct Config {
     vin: String,
-    mqtt_host: String,
-    mqtt_port: u16,
+    gateway_token: String,
     kuksa_host: String,
     kuksa_port: u16,
     hawkbit_url: String,
@@ -37,11 +54,7 @@ impl Config {
     fn from_env() -> Self {
         Self {
             vin: required("VEHICLE_VIN"),
-            mqtt_host: env::var("MQTT_HOST").unwrap_or_else(|_| "localhost".into()),
-            mqtt_port: env::var("MQTT_PORT")
-                .unwrap_or_else(|_| "1883".into())
-                .parse()
-                .expect("MQTT_PORT must be a valid port number"),
+            gateway_token: required("HAWKBIT_GATEWAY_TOKEN"),
             kuksa_host: required("KUKSA_HOST"),
             kuksa_port: env::var("KUKSA_PORT")
                 .unwrap_or_else(|_| "55555".into())
@@ -145,8 +158,23 @@ async fn set_string(client: &mut ValClient<Channel>, path: &str, value: String) 
             fields: vec![Field::Value as i32],
         }],
     };
-    if let Err(e) = client.set(req).await {
-        warn!("failed to set {} = {}: {}", path, value, e);
+    // The Databroker reports per-datapoint problems (unknown path, wrong type)
+    // in the response body rather than as a gRPC error, so a bare Ok(..) is not
+    // enough to conclude the value landed.
+    match client.set(req).await {
+        Err(e) => warn!("failed to set {} = {}: {}", path, value, e),
+        Ok(resp) => {
+            let resp = resp.into_inner();
+            if let Some(error) = resp.error {
+                warn!("databroker rejected {} = {}: {:?}", path, value, error);
+            }
+            for entry_error in resp.errors {
+                warn!(
+                    "databroker rejected {} = {}: {:?}",
+                    entry_error.path, value, entry_error.error
+                );
+            }
+        }
     }
 }
 
@@ -347,7 +375,12 @@ async fn run_deployment(cfg: Arc<Config>, ddi: Arc<Ddi>, action_id: u64) {
         set_string(&mut kuksa, "Vehicle.SoftwareVersion", version.clone()).await;
         info!(vin = %cfg.vin, action_id, %version, "update complete");
         if let Err(e) = ddi
-            .feedback(action_id, "closed", "success", &format!("installed {}", version))
+            .feedback(
+                action_id,
+                "closed",
+                "success",
+                &format!("installed {}", version),
+            )
             .await
         {
             warn!(vin = %cfg.vin, action_id, "success feedback failed: {e}");
@@ -405,50 +438,10 @@ async fn main() {
     let cfg = Arc::new(Config::from_env());
     info!("starting ota-agent for {}", cfg.vin);
 
-    let mut mqtt_opts = MqttOptions::new(
-        format!("ota-agent-{}", cfg.vin),
-        &cfg.mqtt_host,
-        cfg.mqtt_port,
-    );
-    mqtt_opts.set_keep_alive(Duration::from_secs(30));
-    let (mqtt_client, mut eventloop) = AsyncClient::new(mqtt_opts, 64);
-
-    // Sole MQTT role now: receive the retained gateway token from the backend.
-    let token_topic = "fleet/gateway-token";
-    if let Err(e) = mqtt_client.subscribe(token_topic, QoS::AtLeastOnce).await {
-        error!("failed to subscribe to {}: {}", token_topic, e);
-    }
-
-    let mut ddi_started = false;
-
-    loop {
-        match eventloop.poll().await {
-            Ok(Event::Incoming(Incoming::Publish(p))) if p.topic == token_topic => {
-                if ddi_started {
-                    continue;
-                }
-                let token = match std::str::from_utf8(&p.payload) {
-                    Ok(s) if !s.is_empty() => s.to_string(),
-                    Ok(_) => {
-                        warn!("empty gateway token received");
-                        continue;
-                    }
-                    Err(e) => {
-                        warn!("invalid UTF-8 in gateway token: {}", e);
-                        continue;
-                    }
-                };
-                let ddi = Arc::new(Ddi::new(&cfg.hawkbit_url, &cfg.vin, &token));
-                info!(vin = %cfg.vin, "gateway token received; starting DDI poll loop");
-                let cfg_clone = cfg.clone();
-                tokio::spawn(async move { ddi_loop(cfg_clone, ddi).await });
-                ddi_started = true;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                error!("MQTT event loop error: {}", e);
-                time::sleep(Duration::from_secs(2)).await;
-            }
-        }
-    }
+    // The gateway token is deployment configuration rather than something handed
+    // over at runtime, so the agent can start polling DDI immediately and does
+    // not depend on the backend having come up first. HawkBit auto-registers the
+    // target on the first authenticated request.
+    let ddi = Arc::new(Ddi::new(&cfg.hawkbit_url, &cfg.vin, &cfg.gateway_token));
+    ddi_loop(cfg, ddi).await;
 }
