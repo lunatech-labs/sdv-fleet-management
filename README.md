@@ -247,9 +247,11 @@ PLAYWRIGHT_BACKEND_URL=http://localhost:3000 \
 npm test
 ```
 
-### License headers
+### Licensing
 
-Every source file carries an Apache-2.0 SPDX header, matching the Eclipse SDV blueprint this project targets. Files that cannot carry comments (JSON, CSV) use a REUSE-style `<filename>.license` sidecar instead.
+The project is licensed under Apache-2.0, matching the Eclipse SDV blueprint it targets. It was relicensed from EPL-2.0 for that reason; every contributor at the time of the change was a Lunatech employee.
+
+Every source file carries an Apache-2.0 SPDX header. Files that cannot carry comments (JSON, CSV) use a REUSE-style `<filename>.license` sidecar instead. [NOTICE.md](NOTICE.md) records the content inherited from the blueprint and the third-party images the stack runs.
 
 ---
 

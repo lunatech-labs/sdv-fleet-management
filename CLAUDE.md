@@ -106,7 +106,7 @@ OTA:  backend  →  HawkBit Management API (rollouts)  →  HawkBit (port 8083)
 
 **`fms-consumer` is amd64-only upstream.** It is pinned with `platform: linux/amd64` and runs under emulation on arm64 hosts. `fms-forwarder` is the only multi-arch blueprint image.
 
-**Every source file carries an Apache-2.0 SPDX header**, matching the Eclipse SDV blueprint this project targets. Files that cannot carry comments use a `<filename>.license` sidecar. Note the repository's `LICENSE` is still EPL-2.0 — see the open question in the contribution plan.
+**The project is Apache-2.0.** It was relicensed from EPL-2.0 so components can be contributed to the Eclipse SDV Fleet Management blueprint, which is Apache-2.0; every contributor at the time was a Lunatech employee. Every source file carries an Apache-2.0 SPDX header, and files that cannot carry comments use a `<filename>.license` sidecar. See [NOTICE.md](NOTICE.md) for the third-party content inherited from the blueprint.
 
 ## Port reference
 
