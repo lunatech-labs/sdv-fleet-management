@@ -1,3 +1,22 @@
+// SPDX-FileCopyrightText: 2026 Contributors to the Eclipse Foundation
+//
+// See the NOTICE file(s) distributed with this work for additional
+// information regarding copyright ownership.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use std::{env, fs, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{
@@ -15,8 +34,9 @@ use uuid::Uuid;
 mod api;
 mod campaign;
 mod hawkbit;
+mod influx;
 mod models;
-mod mqtt;
+mod ota_listener;
 mod store;
 
 use api::{campaigns, fleet, ws};
@@ -100,11 +120,8 @@ async fn main() {
         .init();
 
     // ── Config from env ───────────────────────────────────────────────────────
-    let mqtt_host = env::var("MQTT_HOST").unwrap_or_else(|_| "localhost".into());
-    let mqtt_port: u16 = env::var("MQTT_PORT")
-        .unwrap_or_else(|_| "1883".into())
-        .parse()
-        .expect("MQTT_PORT must be a valid port number");
+    let influx_config = influx::InfluxConfig::from_env()
+        .unwrap_or_else(|e| panic!("cannot configure InfluxDB ingest: {e}"));
 
     let vehicles_file = env::var("VEHICLES_FILE")
         .map(PathBuf::from)
@@ -148,21 +165,20 @@ async fn main() {
         hawkbit_password,
     ));
     // Targets are no longer pre-registered from here. Each ota-agent self-
-    // registers on first DDI contact, using the gateway token propagated
-    // below. The old `register_targets(..)` call was dropped.
-    let gateway_token = hawkbit
-        .enable_gateway_token()
+    // registers on first DDI contact, using the gateway token provisioned here.
+    // The old `register_targets(..)` call was dropped.
+    //
+    // The token is a deployment-wide secret shared with the agents through
+    // HAWKBIT_GATEWAY_TOKEN rather than broadcast at runtime, so both sides can
+    // start in any order and the demo needs no MQTT broker.
+    let gateway_token = env::var("HAWKBIT_GATEWAY_TOKEN")
+        .expect("HAWKBIT_GATEWAY_TOKEN must be set; the ota-agents authenticate with it");
+    hawkbit
+        .enable_gateway_token(&gateway_token)
         .await
         .expect("failed to provision HawkBit gateway token");
     info!("hawkbit: gateway token ready");
     seed_distribution_sets(&hawkbit).await;
-
-    // ── MQTT connect ─────────────────────────────────────────────────────────
-    let (mqtt_client, eventloop) = mqtt::connect(&mqtt_host, mqtt_port).await;
-
-    // Propagate the gateway token to every ota-agent over MQTT (retained, so
-    // agents joining later pick it up immediately).
-    mqtt::publish_gateway_token(&mqtt_client, &gateway_token).await;
 
     let campaigns = CampaignStore::new();
 
@@ -179,13 +195,39 @@ async fn main() {
         hawkbit: hawkbit.clone(),
     };
 
-    // ── MQTT consumer (background task) ──────────────────────────────────────
-    // MQTT only carries telemetry now. OTA state flows HawkBit → backend via
-    // `poll_campaign_state` below, not via MQTT status messages.
-    tokio::spawn(mqtt::run(eventloop, store, tx));
+    // ── Telemetry ingest (background task) ───────────────────────────────────
+    // Positions come from InfluxDB, which the blueprint's FMS Consumer fills
+    // from the uProtocol vehicle status topic. OTA state flows HawkBit → backend
+    // via `poll_campaign_state` below.
+    tokio::spawn(influx::run(influx_config, store, tx));
 
-    // ── HawkBit DDI reconciliation (background task) ─────────────────────────
-    tokio::spawn(poll_campaign_state(hawkbit.clone(), campaigns, campaign_tx));
+    // ── OTA notifications over uProtocol ─────────────────────────────────────
+    // The transport must outlive this scope: dropping it deregisters the
+    // listener. A failure here is not fatal — poll_campaign_state below still
+    // reconciles against HawkBit, just with higher latency.
+    let _ota_transport = match ota_listener::start(
+        ota_listener::OtaListenerConfig::from_env(),
+        campaigns.clone(),
+        campaign_tx.clone(),
+    )
+    .await
+    {
+        Ok(transport) => Some(transport),
+        Err(e) => {
+            warn!("OTA notifications over uProtocol unavailable: {e}");
+            None
+        }
+    };
+
+    // ── HawkBit reconciliation (background task) ─────────────────────────────
+    // Repairs anything a dropped uProtocol notification would leave stale, and
+    // rehydrates state after a restart. Can be switched off to verify that the
+    // notification path alone drives a campaign to completion.
+    if env::var("HAWKBIT_RECONCILE_ENABLED").as_deref() != Ok("false") {
+        tokio::spawn(poll_campaign_state(hawkbit.clone(), campaigns, campaign_tx));
+    } else {
+        warn!("HawkBit reconciliation disabled; campaign state comes only from uProtocol");
+    }
 
     // ── Axum router ───────────────────────────────────────────────────────────
     let app = build_router(state);

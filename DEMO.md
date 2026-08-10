@@ -28,7 +28,7 @@ hawkbit  | Started HawkbitServerApp
 **4. Verify the stack is up:**
 ```sh
 curl http://localhost:3000/health        # should return 200
-open http://localhost:8080               # frontend
+open http://localhost:8090               # frontend
 open http://localhost:3000/docs          # Swagger UI
 ```
 
@@ -48,7 +48,7 @@ A complete run-through of all features: live map, vehicle drawer, fleet table, O
 
 ### 1. Live fleet map
 
-Open `http://localhost:8080`.
+Open `http://localhost:8090`.
 
 20 vehicle pins are spread across Paris, each moving independently at 1 Hz. Green pins are vehicles with up-to-date software; red pins are vehicles that are out of date or have a campaign in progress.
 

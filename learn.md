@@ -142,7 +142,7 @@ A broadcast channel delivers every message to every active receiver. The sender 
 - [utoipa-swagger-ui](https://docs.rs/utoipa-swagger-ui)
 
 ### tower-http — CORS
-The frontend (port 8080) calls the backend (port 3000) — a cross-origin request. Browsers block these unless the server responds with the correct `Access-Control-Allow-*` headers. `CorsLayer::permissive()` adds permissive CORS headers for all origins, suitable for a local demo.
+The frontend (port 8090) calls the backend (port 3000) — a cross-origin request. Browsers block these unless the server responds with the correct `Access-Control-Allow-*` headers. `CorsLayer::permissive()` adds permissive CORS headers for all origins, suitable for a local demo.
 
 - [tower-http CorsLayer docs](https://docs.rs/tower-http/latest/tower_http/cors/index.html)
 - [MDN — CORS](https://developer.mozilla.org/en-US/docs/Web/HTTP/CORS)

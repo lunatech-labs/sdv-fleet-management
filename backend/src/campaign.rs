@@ -1,3 +1,22 @@
+// SPDX-FileCopyrightText: 2026 Contributors to the Eclipse Foundation
+//
+// See the NOTICE file(s) distributed with this work for additional
+// information regarding copyright ownership.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use std::{collections::HashMap, sync::Arc};
 
 use chrono::{DateTime, Utc};
@@ -70,6 +89,28 @@ impl CampaignStore {
 
     pub fn all(&self) -> Vec<Campaign> {
         self.0.iter().map(|c| c.clone()).collect()
+    }
+
+    /// Find the campaign in which `vin` is still being updated.
+    ///
+    /// OTA notifications from the vehicle carry a VIN and a HawkBit action id
+    /// but no campaign, so this is how an incoming transition is attributed. A
+    /// vehicle only ever has one campaign in flight, but restarts can leave
+    /// several historical ones, so terminal states are skipped and the most
+    /// recently created match wins.
+    pub fn active_campaign_for_vin(&self, vin: &str) -> Option<CampaignId> {
+        self.0
+            .iter()
+            .filter(|c| {
+                c.vehicles.get(vin).is_some_and(|s| {
+                    !matches!(
+                        s,
+                        VehicleUpdateState::Complete { .. } | VehicleUpdateState::Failed { .. }
+                    )
+                })
+            })
+            .max_by_key(|c| c.created)
+            .map(|c| c.id)
     }
 
     /// Update a single vehicle's state inside a campaign. Returns the new state

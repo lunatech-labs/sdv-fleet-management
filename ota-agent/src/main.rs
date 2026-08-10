@@ -1,12 +1,30 @@
+// SPDX-FileCopyrightText: 2026 Contributors to the Eclipse Foundation
+//
+// See the NOTICE file(s) distributed with this work for additional
+// information regarding copyright ownership.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
+
 use std::{env, sync::Arc, time::Duration};
 
 use rand::Rng;
 use reqwest::Client as HttpClient;
-use rumqttc::{AsyncClient, Event, Incoming, MqttOptions, QoS};
 use serde::Deserialize;
 use tokio::{sync::Mutex, time};
 use tonic::transport::Channel;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 
 pub mod kuksa {
     pub mod val {
@@ -18,12 +36,20 @@ pub mod kuksa {
 
 use kuksa::val::v1::{val_client::ValClient, DataEntry, Datapoint, EntryUpdate, Field, SetRequest};
 
+mod uprotocol;
+use uprotocol::{status, OtaReporter, UpdateState};
+
 // ── Config ───────────────────────────────────────────────────────────────────
 
 struct Config {
     vin: String,
-    mqtt_host: String,
-    mqtt_port: u16,
+    gateway_token: String,
+    /// This agent's own uProtocol address. One authority per vehicle, so the
+    /// back end can tell the agents apart.
+    up_source_uri: String,
+    /// The back end orchestrator that OTA notifications are addressed to.
+    up_destination_uri: String,
+    zenoh_config_path: String,
     kuksa_host: String,
     kuksa_port: u16,
     hawkbit_url: String,
@@ -37,11 +63,13 @@ impl Config {
     fn from_env() -> Self {
         Self {
             vin: required("VEHICLE_VIN"),
-            mqtt_host: env::var("MQTT_HOST").unwrap_or_else(|_| "localhost".into()),
-            mqtt_port: env::var("MQTT_PORT")
-                .unwrap_or_else(|_| "1883".into())
-                .parse()
-                .expect("MQTT_PORT must be a valid port number"),
+            gateway_token: required("HAWKBIT_GATEWAY_TOKEN"),
+            up_source_uri: env::var("UP_SOURCE_URI")
+                .unwrap_or_else(|_| format!("up://{}/D102/1/0", required("VEHICLE_VIN"))),
+            up_destination_uri: env::var("UP_DESTINATION_URI")
+                .unwrap_or_else(|_| "up://fms-ota-orchestrator/D103/1/0".into()),
+            zenoh_config_path: env::var("ZENOH_CONFIG_PATH")
+                .unwrap_or_else(|_| "/zenoh-config.json5".into()),
             kuksa_host: required("KUKSA_HOST"),
             kuksa_port: env::var("KUKSA_PORT")
                 .unwrap_or_else(|_| "55555".into())
@@ -145,8 +173,23 @@ async fn set_string(client: &mut ValClient<Channel>, path: &str, value: String) 
             fields: vec![Field::Value as i32],
         }],
     };
-    if let Err(e) = client.set(req).await {
-        warn!("failed to set {} = {}: {}", path, value, e);
+    // The Databroker reports per-datapoint problems (unknown path, wrong type)
+    // in the response body rather than as a gRPC error, so a bare Ok(..) is not
+    // enough to conclude the value landed.
+    match client.set(req).await {
+        Err(e) => warn!("failed to set {} = {}: {}", path, value, e),
+        Ok(resp) => {
+            let resp = resp.into_inner();
+            if let Some(error) = resp.error {
+                warn!("databroker rejected {} = {}: {:?}", path, value, error);
+            }
+            for entry_error in resp.errors {
+                warn!(
+                    "databroker rejected {} = {}: {:?}",
+                    entry_error.path, value, entry_error.error
+                );
+            }
+        }
     }
 }
 
@@ -301,8 +344,30 @@ fn last_path_segment(url: &str) -> Option<String> {
         .map(|s| s.to_string())
 }
 
-async fn run_deployment(cfg: Arc<Config>, ddi: Arc<Ddi>, action_id: u64) {
+async fn run_deployment(
+    cfg: Arc<Config>,
+    ddi: Arc<Ddi>,
+    reporter: Option<Arc<OtaReporter>>,
+    action_id: u64,
+) {
     info!(vin = %cfg.vin, action_id, "deployment picked up");
+
+    // Notify alongside each DDI feedback rather than instead of it: DDI remains
+    // the authoritative record HawkBit acts on, and the notification is what
+    // gives the back end its low-latency view.
+    let notify = |state: UpdateState, version: String, error: Option<String>| {
+        let reporter = reporter.clone();
+        let vin = cfg.vin.clone();
+        async move {
+            if let Some(reporter) = reporter {
+                reporter
+                    .report(status(&vin, action_id, state, &version, error.as_deref()))
+                    .await;
+            }
+        }
+    };
+
+    notify(UpdateState::UPDATE_STATE_PENDING, String::new(), None).await;
 
     // Find out which version we're pretending to install. If HawkBit can't
     // tell us, fall back to "unknown" — we still go through the motions so
@@ -321,6 +386,7 @@ async fn run_deployment(cfg: Arc<Config>, ddi: Arc<Ddi>, action_id: u64) {
     {
         warn!(vin = %cfg.vin, action_id, "download feedback failed: {e}");
     }
+    notify(UpdateState::UPDATE_STATE_DOWNLOADING, version.clone(), None).await;
     time::sleep(Duration::from_secs(cfg.download_delay_secs)).await;
 
     // INSTALLING phase
@@ -330,6 +396,7 @@ async fn run_deployment(cfg: Arc<Config>, ddi: Arc<Ddi>, action_id: u64) {
     {
         warn!(vin = %cfg.vin, action_id, "install feedback failed: {e}");
     }
+    notify(UpdateState::UPDATE_STATE_INSTALLING, version.clone(), None).await;
     time::sleep(Duration::from_secs(cfg.install_delay_secs)).await;
 
     // Terminal: success or (simulated) failure
@@ -342,20 +409,32 @@ async fn run_deployment(cfg: Arc<Config>, ddi: Arc<Ddi>, action_id: u64) {
         {
             warn!(vin = %cfg.vin, action_id, "failure feedback failed: {e}");
         }
+        notify(
+            UpdateState::UPDATE_STATE_FAILED,
+            version.clone(),
+            Some("simulated failure".to_string()),
+        )
+        .await;
     } else {
         let mut kuksa = connect_databroker(&cfg.kuksa_host, cfg.kuksa_port).await;
         set_string(&mut kuksa, "Vehicle.SoftwareVersion", version.clone()).await;
         info!(vin = %cfg.vin, action_id, %version, "update complete");
         if let Err(e) = ddi
-            .feedback(action_id, "closed", "success", &format!("installed {}", version))
+            .feedback(
+                action_id,
+                "closed",
+                "success",
+                &format!("installed {}", version),
+            )
             .await
         {
             warn!(vin = %cfg.vin, action_id, "success feedback failed: {e}");
         }
+        notify(UpdateState::UPDATE_STATE_COMPLETE, version.clone(), None).await;
     }
 }
 
-async fn ddi_loop(cfg: Arc<Config>, ddi: Arc<Ddi>) {
+async fn ddi_loop(cfg: Arc<Config>, ddi: Arc<Ddi>, reporter: Option<Arc<OtaReporter>>) {
     let mut ticker = time::interval(Duration::from_secs(cfg.poll_interval_secs));
     // Track the action ids we've already started processing so a slow
     // state-machine run doesn't get kicked off twice by the next poll.
@@ -370,9 +449,10 @@ async fn ddi_loop(cfg: Arc<Config>, ddi: Arc<Ddi>) {
                     drop(set);
                     let cfg = cfg.clone();
                     let ddi = ddi.clone();
+                    let reporter = reporter.clone();
                     let in_flight = in_flight.clone();
                     tokio::spawn(async move {
-                        run_deployment(cfg, ddi, action_id).await;
+                        run_deployment(cfg, ddi, reporter, action_id).await;
                         in_flight.lock().await.remove(&action_id);
                     });
                 }
@@ -405,50 +485,30 @@ async fn main() {
     let cfg = Arc::new(Config::from_env());
     info!("starting ota-agent for {}", cfg.vin);
 
-    let mut mqtt_opts = MqttOptions::new(
-        format!("ota-agent-{}", cfg.vin),
-        &cfg.mqtt_host,
-        cfg.mqtt_port,
-    );
-    mqtt_opts.set_keep_alive(Duration::from_secs(30));
-    let (mqtt_client, mut eventloop) = AsyncClient::new(mqtt_opts, 64);
-
-    // Sole MQTT role now: receive the retained gateway token from the backend.
-    let token_topic = "fleet/gateway-token";
-    if let Err(e) = mqtt_client.subscribe(token_topic, QoS::AtLeastOnce).await {
-        error!("failed to subscribe to {}: {}", token_topic, e);
-    }
-
-    let mut ddi_started = false;
-
-    loop {
-        match eventloop.poll().await {
-            Ok(Event::Incoming(Incoming::Publish(p))) if p.topic == token_topic => {
-                if ddi_started {
-                    continue;
-                }
-                let token = match std::str::from_utf8(&p.payload) {
-                    Ok(s) if !s.is_empty() => s.to_string(),
-                    Ok(_) => {
-                        warn!("empty gateway token received");
-                        continue;
-                    }
-                    Err(e) => {
-                        warn!("invalid UTF-8 in gateway token: {}", e);
-                        continue;
-                    }
-                };
-                let ddi = Arc::new(Ddi::new(&cfg.hawkbit_url, &cfg.vin, &token));
-                info!(vin = %cfg.vin, "gateway token received; starting DDI poll loop");
-                let cfg_clone = cfg.clone();
-                tokio::spawn(async move { ddi_loop(cfg_clone, ddi).await });
-                ddi_started = true;
-            }
-            Ok(_) => {}
-            Err(e) => {
-                error!("MQTT event loop error: {}", e);
-                time::sleep(Duration::from_secs(2)).await;
-            }
+    // The gateway token is deployment configuration rather than something handed
+    // over at runtime, so the agent can start polling DDI immediately and does
+    // not depend on the backend having come up first. HawkBit auto-registers the
+    // target on the first authenticated request.
+    // A transport failure must not stop the agent doing OTA work: DDI is the
+    // authoritative path and the back end reconciles against HawkBit, so we
+    // degrade to DDI-only reporting rather than refusing to start.
+    let reporter = match OtaReporter::connect(
+        &cfg.up_source_uri,
+        &cfg.up_destination_uri,
+        &cfg.zenoh_config_path,
+    )
+    .await
+    {
+        Ok(reporter) => {
+            info!(vin = %cfg.vin, source = %cfg.up_source_uri, "uProtocol OTA reporting enabled");
+            Some(Arc::new(reporter))
         }
-    }
+        Err(e) => {
+            warn!(vin = %cfg.vin, "uProtocol OTA reporting disabled: {e}");
+            None
+        }
+    };
+
+    let ddi = Arc::new(Ddi::new(&cfg.hawkbit_url, &cfg.vin, &cfg.gateway_token));
+    ddi_loop(cfg, ddi, reporter).await;
 }

@@ -1,6 +1,26 @@
-import { test, expect, type Locator } from '@playwright/test'
+// SPDX-FileCopyrightText: 2026 Contributors to the Eclipse Foundation
+//
+// See the NOTICE file(s) distributed with this work for additional
+// information regarding copyright ownership.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+//
+// SPDX-License-Identifier: Apache-2.0
 
-const EXPECTED_FLEET_SIZE = 20
+import { test, expect, type Locator } from '@playwright/test'
+import { fetchFleetSize } from './fleet-size'
+
+let EXPECTED_FLEET_SIZE = 0
 const MARKER = '.leaflet-marker-icon'
 const DRAWER = '.drawer'
 const BACKEND_URL = process.env.PLAYWRIGHT_BACKEND_URL ?? 'http://localhost:3000'
@@ -31,13 +51,17 @@ async function transform(marker: Locator): Promise<string> {
   return marker.evaluate(el => (el as HTMLElement).style.transform)
 }
 
+test.beforeAll(async () => {
+  EXPECTED_FLEET_SIZE = await fetchFleetSize()
+})
+
 test.describe('SDV fleet map', () => {
   test.beforeEach(async ({ page }) => {
     await page.goto('/')
     await expect(page.locator(MARKER)).toHaveCount(EXPECTED_FLEET_SIZE, { timeout: 30_000 })
   })
 
-  test('renders 20 vehicle markers on the map', async ({ page }) => {
+  test('renders a marker for every vehicle in the fleet', async ({ page }) => {
     const markers = page.locator(MARKER)
     await expect(markers).toHaveCount(EXPECTED_FLEET_SIZE)
     for (let i = 0; i < EXPECTED_FLEET_SIZE; i++) {

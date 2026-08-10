@@ -1,6 +1,8 @@
 # SDV Fleet Management — v2 Demo
 
-A client-facing demo showcasing Rust as a high-performance backend for vehicle fleet management, using Eclipse Kuksa to simulate a realistic fleet of 20 vehicles. Live GPS positions flow from per-vehicle Kuksa Databrokers → MQTT → Rust backend → browser map. V2 adds over-the-air (OTA) software update campaigns powered by Eclipse HawkBit: create a rollout from the UI, watch vehicle markers change colour as updates progress, and track per-vehicle state in real time via WebSocket.
+A demo showcasing Rust as a high-performance backend for vehicle fleet management, built on the [Eclipse SDV Fleet Management blueprint](https://github.com/eclipse-sdv-blueprints/fleet-management). Telemetry flows through the blueprint's uProtocol pipeline: a Kuksa CSV Provider replays a recording into a per-vehicle Databroker, an FMS Forwarder publishes `VehicleStatus` over uProtocol, and the FMS Consumer writes it to InfluxDB, which this project's backend reads to drive a live browser map.
+
+On top of that, this project adds over-the-air (OTA) software update campaigns powered by Eclipse HawkBit: create a rollout from the UI, watch vehicle markers change colour as updates progress, and track per-vehicle state in real time over WebSocket.
 
 For a guided presentation walkthrough with screenshots and a screen recording, see [DEMO.md](DEMO.md).
 
@@ -12,44 +14,74 @@ For a guided presentation walkthrough with screenshots and a screen recording, s
 git clone git@github.com:lunatech-labs/sdv-fleet-management.git
 cd sdv-fleet-management
 
-# Copy .env.example to .env — set HAWKBIT_TOKEN, HAWKBIT_USER, HAWKBIT_PASSWORD.
+# Copy .env.example to .env — set HAWKBIT_GATEWAY_TOKEN, HAWKBIT_USER, HAWKBIT_PASSWORD.
 cp .env.example .env
 
 docker compose up
 ```
 
-Then visit: `http://localhost:8080`.
+Then visit `http://localhost:8090`. Override the port with `FRONTEND_PORT` in `.env` if it is taken.
 
-For first-run timing notes and a pre-demo checklist, see [DEMO.md](DEMO.md).
+HawkBit takes 60 to 120 seconds to become healthy on a cold start, and the backend waits for it. For first-run timing notes and a pre-demo checklist, see [DEMO.md](DEMO.md).
 
 ---
 
 ## Architecture
 
 ```
-Browser (Vue 3)
+Browser (Vue 3 · port 8090)
     │  REST GET /fleet, /campaigns, /versions
     │  WebSocket /ws/fleet, /ws/campaigns
     ▼
 Rust Backend (axum · port 3000)
-    │  MQTT subscribe: kuksa/+/telemetry/#
-    │  REST Management API
-    ▼                         ▼
-Eclipse Mosquitto         Eclipse HawkBit (port 8083)
-(port 1883)                   │  DDI poll loop
-    ▲                         ▼
-    │  2 dynamic signals   OTA agents (×20, Rust)
-    │  per vehicle at 1 Hz     │  gRPC Set SoftwareVersion
-    │  (lat/lon)               │  MQTT publish ota/{vin}/state
-    │                          │
-┌──────────────────────────────────────┐
-│  20 vehicles                         │
-│  Kuksa Databroker + kuksa2mqtt       │
-│  sidecar (ports 55556–55575)         │
-└──────────────────────────────────────┘
-    ▲
-    │  Seed script (Python, runs once)
+    │  Flux query (positions)          │  REST Management API (rollouts)
+    ▼                                  ▼
+InfluxDB (port 8086)              Eclipse HawkBit (port 8083)
+    ▲                                  ▲  DDI poll loop
+    │  writes VehicleStatus            │
+FMS Consumer                       OTA agents (×3, Rust)
+    ▲                                  │  gRPC Set Vehicle.SoftwareVersion
+    │  uProtocol Publish                │
+    │  up://<VIN>/D100/1/D100          │
+Zenoh router (port 7447)               │
+    ▲                                  │
+    │                                  │
+┌───┴──────────────────────────────────┴──────────────┐
+│  3 vehicles                                         │
+│  CSV Provider → Kuksa Databroker (ports 55556–55558)│
+│                 → FMS Forwarder                     │
+└─────────────────────────────────────────────────────┘
 ```
+
+Telemetry uses the blueprint's components unmodified (`fms-forwarder`, `fms-consumer`, pulled from GHCR). The OTA agents and the operator backend/UI are this project's own.
+
+### Why the backend reads InfluxDB
+
+The FMS Consumer already subscribes to the uProtocol vehicle status topic and writes everything to InfluxDB. Rather than adding a second subscriber to the same topic, the backend polls InfluxDB for the latest position per VIN. That keeps this project out of the uProtocol data path and avoids duplicating a component the blueprint maintains. See `backend/src/influx.rs`.
+
+### Per-vehicle recordings
+
+The blueprint ships two recordings and neither works alone for a multi-vehicle fleet: `signalsFmsRecording.csv` has the full FMS signal set but one fixed VIN and no position, and `signalsCovesaCvRecording.csv` has a GNSS track but no VIN. `csv-provider/generate_vehicle_recordings.py` merges them, giving each vehicle its own VIN and its own position track:
+
+```sh
+python3 csv-provider/generate_vehicle_recordings.py --vehicles 3
+```
+
+Outputs `csv-provider/vehicles/<VIN>.csv`, which docker-compose mounts into each CSV Provider. Re-run it after changing `seed/vehicles.json`.
+
+### OTA state over uProtocol
+
+The in-vehicle agent reports every transition (Pending, Downloading, Installing, Complete, Failed) to the back end as a uProtocol Notification, addressed from `up://<VIN>/D102/1/0` to `up://fms-ota-orchestrator/D103/1/0`. The contract is `proto/ota/v1/ota.proto`, shared by both crates.
+
+The agent still drives HawkBit's DDI API over HTTP; only the reporting path runs over uProtocol. The HawkBit Management API poll remains as reconciliation. To confirm the notification path alone drives a rollout:
+
+```sh
+docker compose run --rm -e HAWKBIT_RECONCILE_ENABLED=false -p 3001:3000 backend
+```
+
+### Gateway token
+
+The in-vehicle OTA agents authenticate to HawkBit's DDI API with a gateway token. It is deployment configuration (`HAWKBIT_GATEWAY_TOKEN`), shared by the agents and the backend, which provisions that exact value on HawkBit's DEFAULT tenant at startup. Both sides can therefore start in any order; agents retry until the backend has provisioned it.
 
 ---
 
@@ -57,118 +89,72 @@ Eclipse Mosquitto         Eclipse HawkBit (port 8083)
 
 ### Healthchecks and startup ordering
 
-`mosquitto` exposes a healthcheck using `mosquitto_sub` to confirm the broker is accepting connections. Downstream services use `depends_on` with two different conditions to enforce the correct startup sequence:
-
-- `condition: service_healthy` — waits for the target service's healthcheck to pass (used by sidecars and backend waiting on Mosquitto).
-- `condition: service_completed_successfully` — waits for a one-shot container to exit with code 0 (used by sidecars waiting on the seed script).
-
-This guarantees the order: Mosquitto → Databrokers → Seed → Sidecars.
+`influxdb`, `postgres`, and `hawkbit` expose healthchecks, and downstream services use `depends_on` with `condition: service_healthy` to enforce the startup sequence. HawkBit 1.1.0 does not expose the Spring actuator, so its readiness is probed against the Management API instead — an unauthenticated request answers `401` once the app is serving.
 
 ### YAML anchors and extension fields
 
-The `x-sidecar-defaults` block at the top of the file uses Docker Compose's extension field convention (`x-` prefix). It defines shared configuration — `image`, `depends_on`, and `restart` — once, and each sidecar service merges it in with the YAML merge key `<<: *sidecar-defaults`. This avoids repeating the same 8 lines across all 20 services.
+The `x-databroker-defaults`, `x-csv-provider-defaults`, `x-forwarder-defaults`, and `x-ota-agent-defaults` blocks use Docker Compose's extension field convention (`x-` prefix). Each defines shared configuration once, and services merge it in with the YAML merge key (`<<: *ota-agent-defaults`). Growing the fleet means copying a handful of lines per vehicle rather than a full service definition.
 
 ### BuildKit deduplication
 
-All 20 `kuksa2mqtt` sidecar services share the same `build: ./kuksa2mqtt` and `image: kuksa2mqtt:local` in the YAML anchor. Docker BuildKit is smart enough to build the image only once even though all 20 services declare it — subsequent services hit the cache immediately. The `image:` tag is also what prevents Docker from trying to pull `kuksa2mqtt:local` from Docker Hub on first run.
+All OTA agent services share the same build (context `.`, dockerfile `ota-agent/Dockerfile`) and `image: ota-agent:local`. The context is the repository root so `proto/` is shared with the backend; `.dockerignore` keeps it small. BuildKit builds the image once even though every agent declares it. The `image:` tag is also what stops Docker trying to pull `ota-agent:local` from Docker Hub on first run.
 
-To rebuild the sidecar image:
 ```sh
-docker compose build kuksa2mqtt-01
+docker compose build ota-agent-01
 ```
 
-### Mosquitto config volume
+### Architecture note
 
-The Mosquitto broker mounts its config file from `./mosquitto/mosquitto.conf` as a read-only bind mount. This allows the broker configuration (anonymous access, port) to be version-controlled alongside the rest of the project without building a custom image.
+`fms-consumer` is published upstream for `linux/amd64` only (`fms-forwarder` is the only multi-arch image), so it is pinned with `platform: linux/amd64` and runs under emulation on arm64 hosts.
 
 ---
 
 ## Testing
 
-### Infrastructure
-
-Start only the infrastructure services (replace the range manually, or use `docker compose up` to start everything):
+### Telemetry pipeline
 
 ```sh
-docker compose up mosquitto databroker-01 databroker-02 # ... through databroker-20
+docker compose up -d
 ```
 
 ```sh
-# Mosquitto is accepting connections
-mosquitto_sub -h localhost -p 1883 -t '$SYS/#' -v
-
-# All 20 databroker ports are listening
-for port in $(seq 55556 55575); do
+# Databroker ports are listening
+for port in 55556 55557 55558; do
   echo -n "port $port: " && nc -z localhost $port && echo "OK" || echo "FAIL"
 done
 
 # A databroker responds to gRPC (requires grpcurl: brew install grpcurl)
 grpcurl -plaintext localhost:55556 list
-```
 
-### Seed
-
-```sh
-docker compose up -d mosquitto databroker-01 ... databroker-20
-docker compose up --build seed
-# Expected: "✓ seeded" for each vehicle, exits 0
-```
-
-**Unit tests** (no Docker needed):
-
-```sh
-cd seed
-python -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-pytest tests/ -v
-```
-
-Verify seeded signals with `grpcurl`:
-
-```sh
-# Read the VIN from databroker-01
+# The CSV Provider is writing the VIN
 grpcurl -plaintext \
   -d '{"entries": [{"path": "Vehicle.VehicleIdentification.VIN", "fields": ["FIELD_VALUE"]}]}' \
   localhost:55556 kuksa.val.v1.VAL/Get
 
-# Read all five seeded signals
-grpcurl -plaintext \
-  -d '{"entries": [
-    {"path": "Vehicle.VehicleIdentification.VIN",   "fields": ["FIELD_VALUE"]},
-    {"path": "Vehicle.VehicleIdentification.Brand",  "fields": ["FIELD_VALUE"]},
-    {"path": "Vehicle.VehicleIdentification.Model",  "fields": ["FIELD_VALUE"]},
-    {"path": "Vehicle.CurrentLocation.Latitude",     "fields": ["FIELD_VALUE"]},
-    {"path": "Vehicle.CurrentLocation.Longitude",    "fields": ["FIELD_VALUE"]}
-  ]}' \
-  localhost:55556 kuksa.val.v1.VAL/Get
+# The FMS Consumer is writing to InfluxDB
+docker compose logs fms-consumer | tail
 ```
 
-### kuksa2mqtt sidecar
+Query the positions the backend reads, straight from InfluxDB:
 
 ```sh
-docker compose up --build mosquitto databroker-01 seed kuksa2mqtt-01
-```
-
-```sh
-# MQTT messages flowing at 1 Hz (requires mqtt-cli: brew install mqtt-cli)
-mqtt sub -h localhost -p 1883 --topic='kuksa/VIN-0001/telemetry/#'
-```
-
-Expected output:
-```
-kuksa/VIN-0001/telemetry/VehicleIdentification/VIN   VIN-0001
-kuksa/VIN-0001/telemetry/VehicleIdentification/Brand Toyota
-kuksa/VIN-0001/telemetry/VehicleIdentification/Model Camry
-kuksa/VIN-0001/telemetry/CurrentLocation/Latitude    48.8571
-kuksa/VIN-0001/telemetry/CurrentLocation/Longitude   2.3529
-...
+TOKEN=$(docker compose exec -T influxdb cat /tmp/out/fms-demo.token | tr -d '\r\n')
+curl -s -XPOST "http://127.0.0.1:8086/api/v2/query?org=sdv" \
+  -H "Authorization: Token $TOKEN" \
+  -H "Accept: application/csv" \
+  -H "Content-Type: application/vnd.flux" \
+  --data-binary 'from(bucket: "demo")
+  |> range(start: -30s)
+  |> filter(fn: (r) => r._measurement == "snapshot")
+  |> filter(fn: (r) => r._field == "latitude" or r._field == "longitude")
+  |> group(columns: ["vin", "_field"])
+  |> last()
+  |> keep(columns: ["vin", "_field", "_value"])
+  |> group(columns: ["vin"])
+  |> pivot(rowKey: ["vin"], columnKey: ["_field"], valueColumn: "_value")'
 ```
 
 ### Backend
-
-```sh
-docker compose up   # sidecars must be running for MQTT data to flow
-```
 
 ```sh
 curl http://localhost:3000/health
@@ -180,7 +166,7 @@ curl -s http://localhost:3000/versions | jq
 curl -s http://localhost:3000/campaigns | jq
 curl -s -X POST http://localhost:3000/campaigns \
   -H 'Content-Type: application/json' \
-  -d '{"version":"1.1.0","vins":["VIN-0001","VIN-0002"]}' | jq
+  -d '{"version":"2.0.0","vins":["VIN-0001","VIN-0002"]}' | jq
 curl -s http://localhost:3000/campaigns/<id> | jq
 
 # Swagger UI
@@ -191,27 +177,29 @@ websocat ws://localhost:3000/ws/fleet
 # {"vin":"VIN-0003","lat":48.8641,"lon":2.3318}
 
 websocat ws://localhost:3000/ws/campaigns
-# {"campaign_id":"...","vin":"VIN-0001","state":"Installing"}
+# {"type":"transition","campaign_id":"...","vin":"VIN-0001","state":"INSTALLING"}
 ```
 
 ### Frontend
 
 ```sh
 docker compose up --build
-open http://localhost:8080
+open http://localhost:8090
 ```
 
-- 20 vehicle pins visible on the Paris map
-- Pins move in real time (~1 Hz)
+- Three vehicle pins visible on the Paris map
+- Pins move in real time
 - Clicking a pin opens the drawer with VIN, brand, model, and software version
 - Campaign Panel lets you select a software version and target vehicles, then launch a rollout
-- Vehicle markers change colour as OTA state progresses (Pending, Downloading, Installing, Succeeded, Failed)
+- Vehicle markers change colour as OTA state progresses (Pending, Downloading, Installing, Complete, Failed)
 
 For local development without Docker:
 ```sh
 cd frontend && npm install
 VITE_BACKEND_URL=http://localhost:3000 npm run dev
 ```
+
+In a container the backend URL is not baked into the bundle: the entrypoint writes `/config.js` from `BACKEND_URL`, so one image works in any deployment. `VITE_BACKEND_URL` is only the `npm run dev` fallback.
 
 ---
 
@@ -221,14 +209,8 @@ VITE_BACKEND_URL=http://localhost:3000 npm run dev
 
 ```sh
 cd backend
-
-# Format
 cargo fmt
-
-# Lint
 cargo clippy -- -D warnings
-
-# Test
 cargo test
 ```
 
@@ -238,11 +220,7 @@ All three steps run automatically on every push to `main` via GitHub Actions (`.
 
 ```sh
 cd frontend
-
-# Lint
 npm run lint
-
-# Unit tests
 npm test
 ```
 
@@ -259,13 +237,21 @@ npm run install-browsers      # first time only — downloads Chromium
 npm test
 ```
 
+The suite reads the fleet size from the backend rather than hardcoding it, so it tracks whatever `docker-compose.yml` and `seed/vehicles.json` define.
+
 Overrides (useful when the ports are remapped):
 
 ```sh
-PLAYWRIGHT_BASE_URL=http://localhost:8080 \
+PLAYWRIGHT_BASE_URL=http://localhost:8090 \
 PLAYWRIGHT_BACKEND_URL=http://localhost:3000 \
 npm test
 ```
+
+### Licensing
+
+The project is licensed under Apache-2.0, matching the Eclipse SDV blueprint it targets. It was relicensed from EPL-2.0 for that reason; every contributor at the time of the change was a Lunatech employee.
+
+Every source file carries an Apache-2.0 SPDX header. Files that cannot carry comments (JSON, CSV) use a REUSE-style `<filename>.license` sidecar instead. [NOTICE.md](NOTICE.md) records the content inherited from the blueprint and the third-party images the stack runs.
 
 ---
 
@@ -273,11 +259,12 @@ npm test
 
 | Service | Host port |
 |---|---|
-| Mosquitto MQTT | 1883 |
-| Kuksa Databroker VIN-0001–0020 | 55556–55575 |
+| Kuksa Databroker VIN-0001–0003 | 55556–55558 |
+| Zenoh router | 7447 |
+| InfluxDB | 8086 |
 | Rust backend | 3000 |
 | Eclipse HawkBit | 8083 |
-| Frontend | 8080 |
+| Frontend | 8090 (`FRONTEND_PORT`) |
 
 ---
 
@@ -285,7 +272,9 @@ npm test
 
 | Symptom | Fix |
 |---|---|
-| Campaign panel shows an error | HawkBit is still initialising -- wait 60 to 90 seconds and retry |
+| Campaign panel shows an error | HawkBit is still initialising -- wait 60 to 120 seconds and retry |
 | No pins on the map | Backend is not yet ready -- check `curl http://localhost:3000/health` |
-| Pins are not moving | Sidecars may not have started -- run `docker compose logs -f kuksa2mqtt-01` |
-| Port conflict | Check nothing else is on ports 8080, 3000, 1883, or 8083 |
+| Pins are not moving | Check the telemetry chain: `docker compose logs fms-forwarder-01` then `docker compose logs fms-consumer` |
+| All vehicles share one position | `csv-provider/vehicles/*.csv` may be stale -- re-run `generate_vehicle_recordings.py` |
+| OTA agents log `401` from DDI | The backend has not provisioned the gateway token yet; agents retry automatically |
+| Port conflict | Check nothing else is on ports 8090, 3000, 8086, 7447, or 8083. The UI port is settable with `FRONTEND_PORT`. |

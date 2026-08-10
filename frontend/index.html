@@ -7,6 +7,9 @@
   </head>
   <body>
     <div id="app"></div>
+    <!-- Runtime configuration, written by the container entrypoint. Absent in
+         `npm run dev`, where src/config.ts falls back to VITE_BACKEND_URL. -->
+    <script src="/config.js"></script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
