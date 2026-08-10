@@ -65,7 +65,7 @@ x-ota-agent-defaults: &ota-agent-defaults
   restart: on-failure
 
 x-databroker-defaults: &databroker-defaults
-  image: quay.io/eclipse-kuksa/kuksa-databroker:0.6.0
+  image: quay.io/eclipse-kuksa/kuksa-databroker:0.7.0
   networks:
     - fms-vehicle
   volumes:
