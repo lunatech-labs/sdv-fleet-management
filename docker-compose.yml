@@ -77,6 +77,7 @@ x-databroker-defaults: &databroker-defaults
     RUST_LOG: info
   # for the time being, we do not use TLS secured connections to the Databroker
   command: "--insecure"
+  restart: unless-stopped
 
 x-csv-provider-defaults: &csv-provider-defaults
   image: quay.io/eclipse-kuksa/csv-provider:0.4.5
@@ -86,6 +87,7 @@ x-csv-provider-defaults: &csv-provider-defaults
     PROVIDER_INFINITE: 1
     PROVIDER_LOG_LEVEL: INFO
     KUKSA_DATA_BROKER_PORT: "55556"
+  restart: unless-stopped
 
 x-forwarder-defaults: &forwarder-defaults
   image: ghcr.io/eclipse-sdv-blueprints/fleet-management/fms-forwarder:main
@@ -101,6 +103,9 @@ x-forwarder-defaults: &forwarder-defaults
   environment: &forwarder-env
     TIMER_INTERVAL: "500ms"
     RUST_LOG: "info,fms_forwarder=info"
+  # The forwarder dials the Databroker and the Zenoh router at startup and does
+  # not retry indefinitely, so it must be restarted if either is not up yet.
+  restart: unless-stopped
 
 services:
 
@@ -171,6 +176,7 @@ services:
     volumes:
       - ./config/zenoh/config-client.json5:/zenoh-config.json5:ro
       - influxdb-auth:/tmp:ro
+    restart: unless-stopped
 
   # ── Vehicles ───────────────────────────────────────────────────────────────
   databroker-01:
@@ -336,6 +342,7 @@ services:
         condition: service_healthy
       fms-zenoh-router:
         condition: service_started
+    restart: unless-stopped
 
   frontend:
     build:
@@ -343,8 +350,10 @@ services:
     networks:
       - fms-backend
     ports:
-      - "8080:80"
+      # Override with FRONTEND_PORT if 8090 is taken on your machine.
+      - "${FRONTEND_PORT:-8090}:80"
     environment:
       BACKEND_URL: ${FRONTEND_BACKEND_URL:-http://localhost:3000}
     depends_on:
       - backend
+    restart: unless-stopped

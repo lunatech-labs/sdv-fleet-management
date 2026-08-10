@@ -72,7 +72,7 @@ CSV Provider (×3)  →  Kuksa Databroker (×3, gRPC, port 55556 in-container)
                           ├── GET /fleet, /vehicles/:vin  →  DashMap store
                           └── WS  /ws/fleet               →  broadcast::Sender<PositionEvent>
                                             ↓
-                                  Vue 3 frontend (port 8080)
+                                  Vue 3 frontend (port 8090)
 
 OTA:  backend  →  HawkBit Management API (rollouts)  →  HawkBit (port 8083)
       ota-agent (×3)  →  HawkBit DDI poll loop  →  gRPC Set Vehicle.SoftwareVersion
@@ -117,7 +117,7 @@ OTA:  backend  →  HawkBit Management API (rollouts)  →  HawkBit (port 8083)
 | InfluxDB | 8086 |
 | Rust backend | 3000 |
 | Eclipse HawkBit | 8083 |
-| Frontend | 8080 |
+| Frontend | 8090 (`FRONTEND_PORT`) |
 
 ## Verifying the pipeline manually
 

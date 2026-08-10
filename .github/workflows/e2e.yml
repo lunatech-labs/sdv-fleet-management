@@ -75,7 +75,7 @@ jobs:
       - name: Wait for frontend
         run: |
           for i in $(seq 1 30); do
-            if curl -fsS http://localhost:8080/ > /dev/null; then
+            if curl -fsS http://localhost:8090/ > /dev/null; then
               echo "frontend ready"; exit 0
             fi
             sleep 2

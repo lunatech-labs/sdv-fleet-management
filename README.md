@@ -20,7 +20,7 @@ cp .env.example .env
 docker compose up
 ```
 
-Then visit `http://localhost:8080`.
+Then visit `http://localhost:8090`. Override the port with `FRONTEND_PORT` in `.env` if it is taken.
 
 HawkBit takes 60 to 120 seconds to become healthy on a cold start, and the backend waits for it. For first-run timing notes and a pre-demo checklist, see [DEMO.md](DEMO.md).
 
@@ -29,7 +29,7 @@ HawkBit takes 60 to 120 seconds to become healthy on a cold start, and the backe
 ## Architecture
 
 ```
-Browser (Vue 3 · port 8080)
+Browser (Vue 3 · port 8090)
     │  REST GET /fleet, /campaigns, /versions
     │  WebSocket /ws/fleet, /ws/campaigns
     ▼
@@ -184,7 +184,7 @@ websocat ws://localhost:3000/ws/campaigns
 
 ```sh
 docker compose up --build
-open http://localhost:8080
+open http://localhost:8090
 ```
 
 - Three vehicle pins visible on the Paris map
@@ -242,7 +242,7 @@ The suite reads the fleet size from the backend rather than hardcoding it, so it
 Overrides (useful when the ports are remapped):
 
 ```sh
-PLAYWRIGHT_BASE_URL=http://localhost:8080 \
+PLAYWRIGHT_BASE_URL=http://localhost:8090 \
 PLAYWRIGHT_BACKEND_URL=http://localhost:3000 \
 npm test
 ```
@@ -264,7 +264,7 @@ Every source file carries an Apache-2.0 SPDX header. Files that cannot carry com
 | InfluxDB | 8086 |
 | Rust backend | 3000 |
 | Eclipse HawkBit | 8083 |
-| Frontend | 8080 |
+| Frontend | 8090 (`FRONTEND_PORT`) |
 
 ---
 
@@ -277,4 +277,4 @@ Every source file carries an Apache-2.0 SPDX header. Files that cannot carry com
 | Pins are not moving | Check the telemetry chain: `docker compose logs fms-forwarder-01` then `docker compose logs fms-consumer` |
 | All vehicles share one position | `csv-provider/vehicles/*.csv` may be stale -- re-run `generate_vehicle_recordings.py` |
 | OTA agents log `401` from DDI | The backend has not provisioned the gateway token yet; agents retry automatically |
-| Port conflict | Check nothing else is on ports 8080, 3000, 8086, 7447, or 8083 |
+| Port conflict | Check nothing else is on ports 8090, 3000, 8086, 7447, or 8083. The UI port is settable with `FRONTEND_PORT`. |
