@@ -25,8 +25,8 @@ use axum::{
     Json,
 };
 use chrono::Utc;
+use log::{info, warn};
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -154,6 +154,9 @@ pub async fn create_campaign(
         vehicles,
         created: Utc::now(),
         rollout_id,
+        // Filled in lazily: hawkBit allocates an action per target only once
+        // the rollout starts running.
+        actions: HashMap::new(),
     };
     state.campaigns.insert(campaign.clone());
 

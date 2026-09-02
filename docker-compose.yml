@@ -59,7 +59,12 @@ x-ota-agent-defaults: &ota-agent-defaults
     HAWKBIT_URL: http://hawkbit:8080
     HAWKBIT_GATEWAY_TOKEN: ${HAWKBIT_GATEWAY_TOKEN:-fleet-demo-gateway-token}
     KUKSA_PORT: "55556"
-    FAILURE_RATE: "0.2"
+    # The agent reads its own VIN from its Databroker, so every agent shares
+    # this block and only KUKSA_HOST differs.
+    #
+    # Failure injection is off by default so the stack is deterministic. Raise
+    # it (0.2 is a good demo value) to exercise the FAILED path.
+    FAILURE_RATE: "${OTA_FAILURE_RATE:-0}"
     DOWNLOAD_DELAY_SECS: "5"
     INSTALL_DELAY_SECS: "3"
   restart: on-failure
@@ -178,6 +183,30 @@ services:
       - influxdb-auth:/tmp:ro
     restart: unless-stopped
 
+  fms-server:
+    image: ghcr.io/eclipse-sdv-blueprints/fleet-management/fms-server:main
+    container_name: fms-server
+    # Same constraint as fms-consumer: upstream publishes this image for
+    # linux/amd64 only, so it runs under emulation on arm64 hosts.
+    platform: linux/amd64
+    networks:
+      - fms-backend
+    ports:
+      - "127.0.0.1:8081:8081"
+    depends_on:
+      influxdb:
+        condition: service_healthy
+    env_file: ./influxdb/fms-demo.env
+    environment:
+      INFLUXDB_TOKEN_FILE: /tmp/fms-demo.token
+      RUST_LOG: "info,fms_server=debug"
+    volumes:
+      - influxdb-auth:/tmp:ro
+    # No healthcheck: the image is built FROM scratch and has no shell, so
+    # neither wget nor a shell test can run inside it. The backend retries the
+    # rFMS endpoints until they answer.
+    restart: unless-stopped
+
   # ── Vehicles ───────────────────────────────────────────────────────────────
   databroker-01:
     <<: *databroker-defaults
@@ -242,21 +271,18 @@ services:
     <<: *ota-agent-defaults
     environment:
       <<: *ota-agent-env
-      VEHICLE_VIN: VIN-0001
       KUKSA_HOST: databroker-01
 
   ota-agent-02:
     <<: *ota-agent-defaults
     environment:
       <<: *ota-agent-env
-      VEHICLE_VIN: VIN-0002
       KUKSA_HOST: databroker-02
 
   ota-agent-03:
     <<: *ota-agent-defaults
     environment:
       <<: *ota-agent-env
-      VEHICLE_VIN: VIN-0003
       KUKSA_HOST: databroker-03
 
   # ── OTA campaign orchestration ─────────────────────────────────────────────
@@ -322,9 +348,11 @@ services:
       - fms-backend
     ports:
       - "3000:3000"
-    env_file: ./influxdb/fms-demo.env
     environment:
-      INFLUXDB_TOKEN_FILE: /tmp/fms-demo.token
+      # Positions come from the blueprint rFMS API, not from InfluxDB. The
+      # backend therefore needs no database credentials and no influxdb-auth
+      # volume. See docs/rfms-coverage.md.
+      FMS_SERVER_URI: http://fms-server:8081
       VEHICLES_FILE: /app/vehicles.json
       HAWKBIT_URL: http://hawkbit:8080
       HAWKBIT_USER: ${HAWKBIT_USER:-admin}
@@ -334,10 +362,9 @@ services:
     volumes:
       - ./seed/vehicles.json:/app/vehicles.json:ro
       - ./config/zenoh/config-client.json5:/zenoh-config.json5:ro
-      - influxdb-auth:/tmp:ro
     depends_on:
-      influxdb:
-        condition: service_healthy
+      fms-server:
+        condition: service_started
       hawkbit:
         condition: service_healthy
       fms-zenoh-router:

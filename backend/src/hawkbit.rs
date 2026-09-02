@@ -28,9 +28,9 @@
 
 use std::time::Duration;
 
+use log::{info, warn};
 use reqwest::{Client, StatusCode};
 use serde::Deserialize;
-use tracing::{info, warn};
 
 #[derive(Debug, thiserror::Error)]
 pub enum HawkbitError {
