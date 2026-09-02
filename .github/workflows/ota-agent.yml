@@ -17,15 +17,15 @@
 #
 # SPDX-License-Identifier: Apache-2.0
 
-name: Backend
+name: OTA agent
 
 on:
   push:
     branches: [main]
-    paths: [backend/**, proto/**]
+    paths: [ota-agent/**, proto/**]
   pull_request:
     branches: [main]
-    paths: [backend/**, proto/**]
+    paths: [ota-agent/**, proto/**]
   workflow_dispatch:
 
 jobs:
@@ -33,14 +33,14 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: backend
+        working-directory: ota-agent
 
     steps:
       - uses: actions/checkout@v7.0.1
 
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: backend
+          workspaces: ota-agent
 
       - name: Format
         run: cargo fmt --check
