@@ -11,3 +11,7 @@
 **/.pytest_cache/
 **/*.pyc
 **/.venv/
+
+# Eclipse Dash licence check output
+DEPS.txt
+DASH_SUMMARY.txt
