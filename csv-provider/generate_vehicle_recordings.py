@@ -24,6 +24,8 @@ The blueprint ships two recordings and neither is sufficient on its own:
 VIN and no position, while ``signalsCovesaCvRecording.csv`` carries a GNSS track
 but no VIN. This script merges them, giving each vehicle its own VIN and its own
 position track so that a multi-vehicle fleet shows up as distinct vehicles.
+Each position fix carries latitude, longitude, heading and an RFC3339
+timestamp, which is the set fms-server needs to report a gnssPosition.
 
 Run it from the repository root:
 
@@ -35,7 +37,9 @@ into that vehicle's CSV Provider as ``/dist/signals.csv``.
 
 import argparse
 import csv
+import datetime
 import json
+import math
 import pathlib
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -49,6 +53,8 @@ OUT_DIR = HERE / "vehicles"
 VIN_SIGNAL = "Vehicle.VehicleIdentification.VIN"
 LAT_SIGNAL = "Vehicle.CurrentLocation.Latitude"
 LON_SIGNAL = "Vehicle.CurrentLocation.Longitude"
+HEADING_SIGNAL = "Vehicle.CurrentLocation.Heading"
+TIMESTAMP_SIGNAL = "Vehicle.CurrentLocation.Timestamp"
 
 FIELDNAMES = ["field", "signal", "value", "delay"]
 
@@ -59,6 +65,18 @@ FIELDNAMES = ["field", "signal", "value", "delay"]
 # consumer + the backend's 1 s InfluxDB poll) past what the operator UI and the
 # e2e "marker moves within 3 seconds" test expect.
 POSITION_EVERY = 4
+
+# fms-server only returns a gnssPosition when positionDateTime, longitude and
+# latitude are all present (influx_reader.rs:176), so every fix must carry a
+# timestamp or the rFMS API reports no position at all. fms-forwarder parses the
+# value with chrono::DateTime::parse_from_rfc3339 (kuksa.rs:118), so it must be
+# an RFC3339 string.
+#
+# A recording cannot know its own replay time, so the timestamps are historical
+# and repeat on every loop. That is inherent to a replayed recording. Consumers
+# order by the InfluxDB write time, not by this field.
+TIMESTAMP_BASE = datetime.datetime(2026, 1, 1, tzinfo=datetime.timezone.utc)
+TIMESTAMP_STEP = datetime.timedelta(milliseconds=900)
 
 
 def read_rows(path):
@@ -100,6 +118,16 @@ def rebase_track(track, start_lat, start_lon):
     ]
 
 
+def bearing(start, end):
+    """Return the initial great-circle bearing between two fixes, in degrees."""
+    lat1, lon1 = math.radians(start[0]), math.radians(start[1])
+    lat2, lon2 = math.radians(end[0]), math.radians(end[1])
+    delta_lon = lon2 - lon1
+    y = math.sin(delta_lon) * math.cos(lat2)
+    x = math.cos(lat1) * math.sin(lat2) - math.sin(lat1) * math.cos(lat2) * math.cos(delta_lon)
+    return int(round(math.degrees(math.atan2(y, x)))) % 360
+
+
 def build_recording(fms_rows, track, vin):
     """Interleave position fixes into a copy of the FMS recording."""
     out = []
@@ -112,14 +140,32 @@ def build_recording(fms_rows, track, vin):
 
         if i % POSITION_EVERY == POSITION_EVERY - 1:
             lat, lon = track[fix_index % len(track)]
+            nxt = track[(fix_index + 1) % len(track)]
+            instant = TIMESTAMP_BASE + fix_index * TIMESTAMP_STEP
             fix_index += 1
-            # delay 0: the position pair is published alongside the surrounding
-            # FMS signals rather than adding to the replay's wall-clock length.
+            # delay 0: the whole fix is published alongside the surrounding FMS
+            # signals rather than adding to the replay's wall-clock length.
             out.append(
                 {"field": "current", "signal": LAT_SIGNAL, "value": f"{lat:.7f}", "delay": "0"}
             )
             out.append(
                 {"field": "current", "signal": LON_SIGNAL, "value": f"{lon:.7f}", "delay": "0"}
+            )
+            out.append(
+                {
+                    "field": "current",
+                    "signal": HEADING_SIGNAL,
+                    "value": str(bearing((lat, lon), nxt)),
+                    "delay": "0",
+                }
+            )
+            out.append(
+                {
+                    "field": "current",
+                    "signal": TIMESTAMP_SIGNAL,
+                    "value": instant.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z",
+                    "delay": "0",
+                }
             )
     return out
 
