@@ -1,5 +1,11 @@
 # SDV Fleet Management — Concepts & References
 
+> **Partly superseded.** Sections 2 and 5 describe Eclipse Mosquitto, MQTT topics and the
+> `kuksa2mqtt` side-car. Commit `7078133` removed all three. Telemetry now travels over uProtocol
+> and Zenoh, and OTA state travels as uProtocol Notifications. The remaining sections are still
+> accurate. Kept as a record of the concepts the project was built on.
+
+
 A per-component learning guide for everyone who wants to understand what this project is built on and why.
 
 ---

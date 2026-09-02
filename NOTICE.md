@@ -9,8 +9,8 @@ with the intent of contributing parts of it upstream.
 ## Trademarks
 
 Eclipse SDV Blueprints is a trademark of the Eclipse Foundation. Eclipse, Eclipse
-Kuksa, Eclipse hawkBit, Eclipse Zenoh, Eclipse uProtocol, Eclipse Mosquitto and
-the Eclipse Logo are trademarks or registered trademarks of the Eclipse
+Kuksa, Eclipse hawkBit, Eclipse Zenoh, Eclipse uProtocol and the Eclipse Logo
+are trademarks or registered trademarks of the Eclipse
 Foundation.
 
 ## Copyright
@@ -48,10 +48,6 @@ and remain under its Apache-2.0 license:
 * `influxdb/` (InfluxDB configuration and init script)
 * `config/zenoh/` (Zenoh router and client configuration)
 * `spec/overlay/vss.json` (VSS model, extended by `spec/overlay/ota.vspec`)
-
-`ota-agent/proto/kuksa/val/v1/` contains protobuf definitions from the
-[Eclipse Kuksa Databroker](https://github.com/eclipse-kuksa/kuksa-databroker),
-Apache-2.0.
 
 The stack additionally runs unmodified container images published by the Eclipse
 SDV Blueprints project (`fms-forwarder`, `fms-consumer`), the Eclipse Kuksa

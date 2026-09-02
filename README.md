@@ -6,6 +6,15 @@ On top of that, this project adds over-the-air (OTA) software update campaigns p
 
 For a guided presentation walkthrough with screenshots and a screen recording, see [DEMO.md](DEMO.md).
 
+### Documentation
+
+| Document | Contents |
+|---|---|
+| [DEMO.md](DEMO.md) | Presenter walkthrough |
+| [docs/rfms-coverage.md](docs/rfms-coverage.md) | What the rFMS API returns today, and what the dashboard needs |
+| [docs/licence-check.md](docs/licence-check.md) | Eclipse Dash third-party license result |
+| [docs/history/](docs/history/) | Superseded design documents, kept as a record |
+
 ---
 
 ## Quickstart
@@ -82,9 +91,11 @@ Each fix carries latitude, longitude, heading and an RFC3339 timestamp. The time
 
 ### OTA state over uProtocol
 
-The in-vehicle agent reports every transition (Pending, Downloading, Installing, Complete, Failed) to the back end as a uProtocol Notification, addressed from `up://<VIN>/D102/1/0` to `up://fms-ota-orchestrator/D103/1/0`. The contract is `proto/ota/v1/ota.proto`, shared by both crates.
+The in-vehicle agent reports every transition (Pending, Downloading, Installing, Complete, Failed) to the back end as a uProtocol Notification, addressed from `up://<VIN>/D102/1/8001` to `up://fms-ota-orchestrator/D103/1/0`. The contract is `proto/ota/v1/ota.proto`, shared by both crates.
 
-The agent still drives HawkBit's DDI API over HTTP; only the reporting path runs over uProtocol. The HawkBit Management API poll remains as reconciliation. To confirm the notification path alone drives a rollout:
+Simulated install failures are off by default, so a normal run is deterministic and the end-to-end suite is not flaky. To show the FAILED path, set `OTA_FAILURE_RATE=0.2` in `.env` and restart the agents.
+
+The agent still drives HawkBit's DDI API over HTTP. Only the reporting path runs over uProtocol. The HawkBit Management API poll remains as reconciliation. To confirm the notification path alone drives a rollout:
 
 ```sh
 docker compose run --rm -e HAWKBIT_RECONCILE_ENABLED=false -p 3001:3000 backend
@@ -189,8 +200,8 @@ curl -s -X POST http://localhost:3000/campaigns \
   -d '{"version":"2.0.0","vins":["VIN-0001","VIN-0002"]}' | jq
 curl -s http://localhost:3000/campaigns/<id> | jq
 
-# Swagger UI
-open http://localhost:3000/docs
+# OpenAPI document (Swagger UI is not bundled; see docs/licence-check.md)
+curl -s http://localhost:3000/api-docs/openapi.json | jq
 
 # WebSocket live streams (requires websocat: brew install websocat)
 websocat ws://localhost:3000/ws/fleet
@@ -269,7 +280,9 @@ npm test
 
 ### Licensing
 
-The project is licensed under Apache-2.0, matching the Eclipse SDV blueprint it targets. It was relicensed from EPL-2.0 for that reason; every contributor at the time of the change was a Lunatech employee.
+The project is licensed under Apache-2.0, matching the Eclipse SDV blueprint it targets. It was relicensed from EPL-2.0 for that reason. Every copyright holder at the time of the change was a Lunatech employee, and Lunatech consented to the change, so no third-party permission was needed.
+
+Third-party dependencies are checked with the Eclipse Dash tool. Run `scripts/check-3rd-party-licenses.sh`. The current result is in [docs/licence-check.md](docs/licence-check.md).
 
 Every source file carries an Apache-2.0 SPDX header. Files that cannot carry comments (JSON, CSV) use a REUSE-style `<filename>.license` sidecar instead. [NOTICE.md](NOTICE.md) records the content inherited from the blueprint and the third-party images the stack runs.
 

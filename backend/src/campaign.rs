@@ -30,7 +30,7 @@ pub type CampaignId = Uuid;
 /// Per-vehicle progress within a campaign.
 ///
 /// Serialised as `{ "state": "...", ... }` via the `tag = "state"` discriminator,
-/// matching the shape documented in specs-v2.md §7.4.
+/// matching the shape documented in docs/history/specs-v2.md §7.4.
 #[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "state")]
 pub enum VehicleUpdateState {

@@ -95,7 +95,7 @@ test.describe('SDV fleet map', () => {
 
     await expect
       .poll(() => transform(marker), {
-        message: 'marker transform should change as MQTT position updates arrive',
+        message: 'marker transform should change as position updates arrive',
         timeout: 3_000,
         intervals: [100, 150, 200],
       })

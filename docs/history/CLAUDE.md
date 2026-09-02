@@ -138,5 +138,5 @@ curl -s -X POST http://localhost:3000/campaigns \
   -d '{"version":"2.0.0","vins":["VIN-0001","VIN-0002","VIN-0003"]}' | jq
 
 # Swagger UI
-open http://localhost:3000/docs
+curl -s http://localhost:3000/api-docs/openapi.json | jq
 ```
