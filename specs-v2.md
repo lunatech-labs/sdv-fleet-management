@@ -1,5 +1,11 @@
 # Fleet Management Demo, v2 Specification
 
+> **Superseded.** This document records the design as it stood before the
+> project moved onto the Eclipse SDV blueprint pipeline (commit `7078133`).
+> It still describes Mosquitto, MQTT OTA topics and the `kuksa2mqtt` side-car,
+> none of which exist any more. Kept as a record of the decisions taken at the
+> time. For the current design, read `README.md` and `docs/`.
+
 **Version:** 2.1
 **Status:** Implemented
 **Audience:** External clients and prospects
