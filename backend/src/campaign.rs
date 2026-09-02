@@ -57,6 +57,13 @@ pub struct Campaign {
     /// state against HawkBit. Not serialised to the dashboard.
     #[serde(skip)]
     pub rollout_id: Option<u64>,
+    /// HawkBit action id per VIN, learned the first time a vehicle reports.
+    ///
+    /// OTA notifications carry `(vin, action_id)` and no campaign, so this is
+    /// the correlation key. It cannot be filled in at rollout creation because
+    /// HawkBit allocates an action per target only once the rollout starts.
+    #[serde(skip)]
+    pub actions: HashMap<String, u64>,
 }
 
 /// Event emitted whenever a single vehicle transitions state.
@@ -91,26 +98,43 @@ impl CampaignStore {
         self.0.iter().map(|c| c.clone()).collect()
     }
 
-    /// Find the campaign in which `vin` is still being updated.
+    /// Find the campaign that owns a specific HawkBit action for a vehicle.
     ///
-    /// OTA notifications from the vehicle carry a VIN and a HawkBit action id
-    /// but no campaign, so this is how an incoming transition is attributed. A
-    /// vehicle only ever has one campaign in flight, but restarts can leave
-    /// several historical ones, so terminal states are skipped and the most
-    /// recently created match wins.
-    pub fn active_campaign_for_vin(&self, vin: &str) -> Option<CampaignId> {
+    /// This is an exact match against the cached `(vin, action_id)` binding. It
+    /// returns `None` until the action has been bound with `bind_action`.
+    pub fn campaign_for_action(&self, vin: &str, action_id: u64) -> Option<CampaignId> {
         self.0
             .iter()
-            .filter(|c| {
-                c.vehicles.get(vin).is_some_and(|s| {
-                    !matches!(
-                        s,
-                        VehicleUpdateState::Complete { .. } | VehicleUpdateState::Failed { .. }
-                    )
-                })
-            })
-            .max_by_key(|c| c.created)
+            .find(|c| c.actions.get(vin) == Some(&action_id))
             .map(|c| c.id)
+    }
+
+    /// Find the campaign created from a given HawkBit rollout.
+    pub fn campaign_for_rollout(&self, rollout_id: u64) -> Option<CampaignId> {
+        self.0
+            .iter()
+            .find(|c| c.rollout_id == Some(rollout_id))
+            .map(|c| c.id)
+    }
+
+    /// Return the action id already bound for a vehicle in a campaign.
+    pub fn bound_action(&self, vin: &str) -> Option<u64> {
+        self.0.iter().find_map(|c| c.actions.get(vin).copied())
+    }
+
+    /// Cache the HawkBit action id that belongs to a vehicle in a campaign.
+    ///
+    /// Returns false if the campaign does not exist or does not target the VIN,
+    /// so a mis-resolved action cannot attach itself to an unrelated campaign.
+    pub fn bind_action(&self, campaign_id: &CampaignId, vin: &str, action_id: u64) -> bool {
+        let Some(mut campaign) = self.0.get_mut(campaign_id) else {
+            return false;
+        };
+        if !campaign.vehicles.contains_key(vin) {
+            return false;
+        }
+        campaign.actions.insert(vin.to_string(), action_id);
+        true
     }
 
     /// Update a single vehicle's state inside a campaign. Returns the new state
@@ -147,6 +171,7 @@ mod tests {
             vehicles,
             created: Utc::now(),
             rollout_id: None,
+            actions: HashMap::new(),
         }
     }
 
@@ -190,6 +215,90 @@ mod tests {
             fetched.vehicles["VIN-0001"],
             VehicleUpdateState::Downloading
         ));
+    }
+
+    #[test]
+    fn campaign_for_action_returns_none_until_bound() {
+        let store = CampaignStore::new();
+        let c = make_campaign(&["VIN-0001"]);
+        let id = c.id;
+        store.insert(c);
+
+        assert!(store.campaign_for_action("VIN-0001", 42).is_none());
+        assert!(store.bind_action(&id, "VIN-0001", 42));
+        assert_eq!(store.campaign_for_action("VIN-0001", 42), Some(id));
+    }
+
+    #[test]
+    fn campaign_for_action_does_not_match_a_different_action() {
+        let store = CampaignStore::new();
+        let c = make_campaign(&["VIN-0001"]);
+        let id = c.id;
+        store.insert(c);
+        store.bind_action(&id, "VIN-0001", 42);
+
+        assert!(store.campaign_for_action("VIN-0001", 43).is_none());
+    }
+
+    #[test]
+    fn overlapping_campaigns_stay_separate() {
+        // The case the old most-recent-campaign guess got wrong: two campaigns
+        // both targeting VIN-0001, each with its own hawkBit action.
+        let store = CampaignStore::new();
+        let first = make_campaign(&["VIN-0001", "VIN-0002"]);
+        let second = make_campaign(&["VIN-0001", "VIN-0003"]);
+        let (first_id, second_id) = (first.id, second.id);
+        store.insert(first);
+        store.insert(second);
+
+        store.bind_action(&first_id, "VIN-0002", 10);
+        store.bind_action(&second_id, "VIN-0003", 11);
+        store.bind_action(&first_id, "VIN-0001", 12);
+
+        assert_eq!(store.campaign_for_action("VIN-0001", 12), Some(first_id));
+        assert_eq!(store.campaign_for_action("VIN-0002", 10), Some(first_id));
+        assert_eq!(store.campaign_for_action("VIN-0003", 11), Some(second_id));
+    }
+
+    #[test]
+    fn bind_action_rejects_a_vin_the_campaign_does_not_target() {
+        let store = CampaignStore::new();
+        let c = make_campaign(&["VIN-0001"]);
+        let id = c.id;
+        store.insert(c);
+
+        assert!(!store.bind_action(&id, "VIN-9999", 42));
+        assert!(store.campaign_for_action("VIN-9999", 42).is_none());
+    }
+
+    #[test]
+    fn bind_action_rejects_an_unknown_campaign() {
+        let store = CampaignStore::new();
+        assert!(!store.bind_action(&Uuid::new_v4(), "VIN-0001", 42));
+    }
+
+    #[test]
+    fn campaign_for_rollout_matches_the_rollout_id() {
+        let store = CampaignStore::new();
+        let mut c = make_campaign(&["VIN-0001"]);
+        c.rollout_id = Some(7);
+        let id = c.id;
+        store.insert(c);
+
+        assert_eq!(store.campaign_for_rollout(7), Some(id));
+        assert!(store.campaign_for_rollout(8).is_none());
+    }
+
+    #[test]
+    fn bound_action_reports_the_cached_id() {
+        let store = CampaignStore::new();
+        let c = make_campaign(&["VIN-0001"]);
+        let id = c.id;
+        store.insert(c);
+
+        assert!(store.bound_action("VIN-0001").is_none());
+        store.bind_action(&id, "VIN-0001", 42);
+        assert_eq!(store.bound_action("VIN-0001"), Some(42));
     }
 
     #[test]

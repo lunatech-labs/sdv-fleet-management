@@ -1,6 +1,6 @@
 # SDV Fleet Management — v2 Demo
 
-A demo showcasing Rust as a high-performance backend for vehicle fleet management, built on the [Eclipse SDV Fleet Management blueprint](https://github.com/eclipse-sdv-blueprints/fleet-management). Telemetry flows through the blueprint's uProtocol pipeline: a Kuksa CSV Provider replays a recording into a per-vehicle Databroker, an FMS Forwarder publishes `VehicleStatus` over uProtocol, and the FMS Consumer writes it to InfluxDB, which this project's backend reads to drive a live browser map.
+A demo showcasing Rust as a high-performance backend for vehicle fleet management, built on the [Eclipse SDV Fleet Management blueprint](https://github.com/eclipse-sdv-blueprints/fleet-management). Telemetry flows through the blueprint's uProtocol pipeline: a Kuksa CSV Provider replays a recording into a per-vehicle Databroker, an FMS Forwarder publishes `VehicleStatus` over uProtocol, and the FMS Consumer writes it to InfluxDB. FMS Server serves that as the rFMS API, which this project's backend consumes to drive a live browser map.
 
 On top of that, this project adds over-the-air (OTA) software update campaigns powered by Eclipse HawkBit: create a rollout from the UI, watch vehicle markers change colour as updates progress, and track per-vehicle state in real time over WebSocket.
 
@@ -34,16 +34,19 @@ Browser (Vue 3 · port 8090)
     │  WebSocket /ws/fleet, /ws/campaigns
     ▼
 Rust Backend (axum · port 3000)
-    │  Flux query (positions)          │  REST Management API (rollouts)
+    │  rFMS REST (positions)           │  REST Management API (rollouts)
     ▼                                  ▼
-InfluxDB (port 8086)              Eclipse HawkBit (port 8083)
-    ▲                                  ▲  DDI poll loop
+FMS Server (port 8081)            Eclipse HawkBit (port 8083)
+    │  Flux query                      ▲  DDI poll loop
+    ▼                                  │
+InfluxDB (port 8086)               OTA agents (×3, Rust)
+    ▲                                  │  Vehicle.SoftwareVersion via Kuksa SDK
     │  writes VehicleStatus            │
-FMS Consumer                       OTA agents (×3, Rust)
-    ▲                                  │  gRPC Set Vehicle.SoftwareVersion
+FMS Consumer                           │  uProtocol Notification
+    ▲                                  │  up://<VIN>/D102/1/8001
     │  uProtocol Publish                │
     │  up://<VIN>/D100/1/D100          │
-Zenoh router (port 7447)               │
+Zenoh router (port 7447)               ▼
     ▲                                  │
     │                                  │
 ┌───┴──────────────────────────────────┴──────────────┐
@@ -55,9 +58,15 @@ Zenoh router (port 7447)               │
 
 Telemetry uses the blueprint's components unmodified (`fms-forwarder`, `fms-consumer`, pulled from GHCR). The OTA agents and the operator backend/UI are this project's own.
 
-### Why the backend reads InfluxDB
+### Why the backend reads the rFMS API
 
-The FMS Consumer already subscribes to the uProtocol vehicle status topic and writes everything to InfluxDB. Rather than adding a second subscriber to the same topic, the backend polls InfluxDB for the latest position per VIN. That keeps this project out of the uProtocol data path and avoids duplicating a component the blueprint maintains. See `backend/src/influx.rs`.
+The FMS Consumer already subscribes to the uProtocol vehicle status topic and writes everything to InfluxDB, and FMS Server serves that data as the rFMS API. The backend polls the rFMS API rather than the database.
+
+Two reasons. A dashboard that speaks rFMS works against any backend implementing the specification, and the telemetry owner does not have to hand out database credentials. It also gives the rFMS endpoints a real consumer, which the blueprint did not have. Reading InfluxDB directly is quicker to write, and it couples this component to a schema that belongs to the FMS Consumer.
+
+Two limits of the current blueprint implementation shape the code. `/rfms/vehicles` returns the VIN and nothing else, so brand and model come from `seed/vehicles.json`. The `latestOnly` parameter returns the latest position per trigger type rather than per vehicle, so the backend keeps the newest entry per VIN itself.
+
+See `backend/src/rfms.rs` and `docs/rfms-coverage.md`.
 
 ### Per-vehicle recordings
 
@@ -68,6 +77,8 @@ python3 csv-provider/generate_vehicle_recordings.py --vehicles 3
 ```
 
 Outputs `csv-provider/vehicles/<VIN>.csv`, which docker-compose mounts into each CSV Provider. Re-run it after changing `seed/vehicles.json`.
+
+Each fix carries latitude, longitude, heading and an RFC3339 timestamp. The timestamp is not optional: FMS Server returns a `gnssPosition` only when the position timestamp, longitude and latitude are all present, so a recording without `Vehicle.CurrentLocation.Timestamp` produces an empty map. See `docs/rfms-coverage.md`.
 
 ### OTA state over uProtocol
 
@@ -135,7 +146,16 @@ grpcurl -plaintext \
 docker compose logs fms-consumer | tail
 ```
 
-Query the positions the backend reads, straight from InfluxDB:
+Query the positions the backend reads, from the rFMS API:
+
+```sh
+curl -s "http://127.0.0.1:8081/rfms/vehiclepositions?latestOnly=true" | jq \
+  '.vehiclePositionResponse.vehiclePositions[] | {vin, gnssPosition}'
+```
+
+A `gnssPosition` of `null` means the recording carries no `Vehicle.CurrentLocation.Timestamp` row. Regenerate the recordings.
+
+The same data one layer down, straight from InfluxDB:
 
 ```sh
 TOKEN=$(docker compose exec -T influxdb cat /tmp/out/fms-demo.token | tr -d '\r\n')
@@ -262,6 +282,7 @@ Every source file carries an Apache-2.0 SPDX header. Files that cannot carry com
 | Kuksa Databroker VIN-0001–0003 | 55556–55558 |
 | Zenoh router | 7447 |
 | InfluxDB | 8086 |
+| FMS Server (rFMS API) | 8081 |
 | Rust backend | 3000 |
 | Eclipse HawkBit | 8083 |
 | Frontend | 8090 (`FRONTEND_PORT`) |

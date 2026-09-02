@@ -27,14 +27,15 @@
 
 use std::{str::FromStr, sync::Arc};
 
+use log::{debug, info, warn};
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
 use up_rust::{
     LocalUriProvider, StaticUriProvider, UListener, UMessage, UTransport, UUri, UUriError,
 };
 use up_transport_zenoh::UPTransportZenoh;
 
-use crate::campaign::{CampaignEvent, CampaignStore, VehicleUpdateState};
+use crate::campaign::{CampaignEvent, CampaignId, CampaignStore, VehicleUpdateState};
+use crate::hawkbit::HawkbitClient;
 
 pub mod proto {
     include!(concat!(env!("OUT_DIR"), "/ota_proto/mod.rs"));
@@ -68,6 +69,55 @@ pub fn to_vehicle_state(status: &OtaStatus) -> Option<VehicleUpdateState> {
 struct OtaStatusListener {
     campaigns: CampaignStore,
     campaign_tx: broadcast::Sender<CampaignEvent>,
+    hawkbit: Arc<HawkbitClient>,
+}
+
+impl OtaStatusListener {
+    /// Resolve which campaign a `(vin, action_id)` notification belongs to.
+    ///
+    /// The cached binding answers every notification after the first. The first
+    /// one costs a single HawkBit lookup: the action carries the rollout it came
+    /// from, and a campaign is created from exactly one rollout.
+    ///
+    /// Guessing the vehicle's most recent non-terminal campaign, which is what
+    /// this used to do, misattributes transitions once two campaigns overlap and
+    /// lets a late notification reopen a finished one.
+    async fn resolve_campaign(&self, vin: &str, action_id: u64) -> Option<CampaignId> {
+        if let Some(id) = self.campaigns.campaign_for_action(vin, action_id) {
+            return Some(id);
+        }
+
+        // A newer action supersedes the bound one. An older action is a late
+        // notification from a campaign that has already moved on, so drop it.
+        if let Some(bound) = self.campaigns.bound_action(vin) {
+            if action_id < bound {
+                debug!("[{vin}] dropping stale OTA notification: action {action_id} predates bound action {bound}");
+                return None;
+            }
+        }
+
+        let actions = match self.hawkbit.list_target_actions(vin).await {
+            Ok(actions) => actions,
+            Err(e) => {
+                warn!("[{vin}] cannot resolve action {action_id} against hawkBit: {e}");
+                return None;
+            }
+        };
+
+        let rollout = actions
+            .iter()
+            .find(|a| a.id == action_id)
+            .and_then(|a| a.rollout)?;
+
+        let campaign_id = self.campaigns.campaign_for_rollout(rollout)?;
+
+        if self.campaigns.bind_action(&campaign_id, vin, action_id) {
+            debug!("[{vin}] bound action {action_id} (rollout {rollout}) to its campaign");
+            Some(campaign_id)
+        } else {
+            None
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -82,19 +132,21 @@ impl UListener for OtaStatusListener {
         };
 
         let Some(state) = to_vehicle_state(&status) else {
-            debug!(vin = %status.vin, "ignoring OTA notification with unspecified state");
+            debug!(
+                "[{}] ignoring OTA notification with unspecified state",
+                status.vin
+            );
             return;
         };
 
         // The agent reports (vin, action_id); the dashboard is organised by
-        // campaign. HawkBit action ids are not tracked here, so the vehicle's
-        // one in-flight campaign is the correlation key. A vehicle can only be
-        // in one active campaign at a time, which the API enforces on create.
-        let Some(campaign_id) = self.campaigns.active_campaign_for_vin(&status.vin) else {
+        // campaign. Correlate on the action id, resolving it once through
+        // hawkBit. Anything that cannot be resolved is left to
+        // `poll_campaign_state`, which is the authority.
+        let Some(campaign_id) = self.resolve_campaign(&status.vin, status.action_id).await else {
             debug!(
-                vin = %status.vin,
-                action_id = status.action_id,
-                "OTA notification for a vehicle with no active campaign"
+                "[{}] OTA notification for action {} does not resolve to a campaign",
+                status.vin, status.action_id
             );
             return;
         };
@@ -103,7 +155,10 @@ impl UListener for OtaStatusListener {
             .campaigns
             .set_vehicle_state(&campaign_id, &status.vin, state)
         {
-            debug!(vin = %status.vin, ?state, "OTA state from uProtocol notification");
+            debug!(
+                "[{}] OTA state from uProtocol notification: {state:?}",
+                status.vin
+            );
             let _ = self.campaign_tx.send(CampaignEvent {
                 campaign_id,
                 vin: status.vin,
@@ -117,6 +172,10 @@ impl UListener for OtaStatusListener {
 pub struct OtaListenerConfig {
     /// This component's own uProtocol address; agents address notifications here.
     pub uri: String,
+    /// Which sources to accept notifications from. The authority is one per
+    /// vehicle and therefore a wildcard; the service and resource ids are the
+    /// OTA agent's status notification.
+    pub source_filter: String,
     pub zenoh_config_path: String,
 }
 
@@ -125,6 +184,8 @@ impl OtaListenerConfig {
         Self {
             uri: std::env::var("UP_URI")
                 .unwrap_or_else(|_| "up://fms-ota-orchestrator/D103/1/0".into()),
+            source_filter: std::env::var("UP_OTA_SOURCE_FILTER")
+                .unwrap_or_else(|_| "up://*/D102/1/8001".into()),
             zenoh_config_path: std::env::var("ZENOH_CONFIG_PATH")
                 .unwrap_or_else(|_| "/zenoh-config.json5".into()),
         }
@@ -139,6 +200,7 @@ pub async fn start(
     config: OtaListenerConfig,
     campaigns: CampaignStore,
     campaign_tx: broadcast::Sender<CampaignEvent>,
+    hawkbit: Arc<HawkbitClient>,
 ) -> Result<Arc<dyn UTransport>, String> {
     let uri = UUri::from_str(&config.uri).map_err(|e: UUriError| format!("bad UP_URI: {e}"))?;
     let uri_provider = Arc::new(
@@ -156,17 +218,23 @@ pub async fn start(
     let listener = Arc::new(OtaStatusListener {
         campaigns,
         campaign_tx,
+        hawkbit,
     });
 
-    // Any authority may notify us (one per vehicle), so filter on the sink:
-    // this component's own address.
-    let source_filter = UUri::any();
+    // Filter on both ends. The sink is this component's own address. The source
+    // is narrowed to the OTA agent's status resource so unrelated traffic on the
+    // same Zenoh session is not deserialised as an OtaStatus.
+    let source_filter = UUri::from_str(&config.source_filter)
+        .map_err(|e: UUriError| format!("bad UP_OTA_SOURCE_FILTER: {e}"))?;
     transport
         .register_listener(&source_filter, Some(&uri), listener)
         .await
         .map_err(|e| format!("cannot register OTA listener: {e}"))?;
 
-    info!(uri = %config.uri, "listening for OTA notifications over uProtocol");
+    info!(
+        "listening for OTA notifications over uProtocol at {} from {}",
+        config.uri, config.source_filter
+    );
     Ok(transport)
 }
 

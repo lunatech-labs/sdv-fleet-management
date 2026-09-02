@@ -24,9 +24,9 @@ use axum::{
     },
     response::IntoResponse,
 };
+use log::{debug, info, warn};
 use std::collections::HashMap;
 use tokio::sync::broadcast;
-use tracing::{debug, info, warn};
 
 use serde::Serialize;
 

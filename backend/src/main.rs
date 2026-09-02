@@ -17,26 +17,26 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{env, fs, path::PathBuf, sync::Arc, time::Duration};
+use std::{fs, path::PathBuf, sync::Arc, time::Duration};
 
 use axum::{
     routing::{get, post},
-    Router,
+    Json, Router,
 };
 use chrono::{DateTime, Utc};
+use clap::Parser;
+use log::{debug, info, warn};
 use tokio::sync::broadcast;
 use tower_http::cors::CorsLayer;
-use tracing::{debug, info, warn};
 use utoipa::OpenApi;
-use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 mod api;
 mod campaign;
 mod hawkbit;
-mod influx;
 mod models;
 mod ota_listener;
+mod rfms;
 mod store;
 
 use api::{campaigns, fleet, ws};
@@ -57,6 +57,53 @@ pub struct AppState {
 }
 
 // ── OpenAPI doc ───────────────────────────────────────────────────────────────
+
+/// Fleet operations backend.
+///
+/// Serves the operator dashboard, orchestrates OTA campaigns through the
+/// hawkBit Management API, and reads fleet telemetry from the blueprint rFMS
+/// API.
+#[derive(Debug, Parser)]
+#[command(name = "backend", about, version)]
+struct Cli {
+    #[arg(long, env = "BIND_ADDR", default_value = "0.0.0.0:3000")]
+    bind_addr: String,
+
+    /// Vehicle registry. Supplies brand and model, which the rFMS API does not
+    /// return today. See docs/rfms-coverage.md.
+    #[arg(long, env = "VEHICLES_FILE", default_value = "vehicles.json")]
+    vehicles_file: PathBuf,
+
+    #[arg(long, env = "HAWKBIT_URL", default_value = "http://hawkbit:8080")]
+    hawkbit_url: String,
+
+    #[arg(long, env = "HAWKBIT_USER", default_value = "admin")]
+    hawkbit_user: String,
+
+    #[arg(long, env = "HAWKBIT_PASSWORD", default_value = "admin")]
+    hawkbit_password: String,
+
+    /// Shared with the agents, which authenticate to the DDI API with it.
+    #[arg(long, env = "HAWKBIT_GATEWAY_TOKEN")]
+    hawkbit_gateway_token: String,
+
+    /// Reconcile campaign state against the hawkBit Management API.
+    ///
+    /// Set to false to demonstrate that the uProtocol notification path alone
+    /// drives a rollout to completion.
+    #[arg(
+        long,
+        env = "HAWKBIT_RECONCILE_ENABLED",
+        default_value_t = true,
+        action = clap::ArgAction::Set
+    )]
+    hawkbit_reconcile_enabled: bool,
+}
+
+/// Serve the generated OpenAPI document.
+async fn openapi() -> Json<utoipa::openapi::OpenApi> {
+    Json(ApiDoc::openapi())
+}
 
 #[derive(OpenApi)]
 #[openapi(
@@ -92,7 +139,10 @@ struct ApiDoc;
 
 pub fn build_router(state: AppState) -> Router {
     Router::new()
-        .merge(SwaggerUi::new("/docs").url("/api-docs/openapi.json", ApiDoc::openapi()))
+        // The OpenAPI document is served as JSON. utoipa-swagger-ui is not
+        // used: it vendors the Swagger UI web assets into the binary, which
+        // is a large third-party licence surface for a demo component.
+        .route("/api-docs/openapi.json", get(openapi))
         .route("/health", get(fleet::health))
         .route("/fleet", get(fleet::get_fleet))
         .route("/vehicles/:vin", get(fleet::get_vehicle))
@@ -112,26 +162,14 @@ pub fn build_router(state: AppState) -> Router {
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "backend=info,tower_http=info".into()),
-        )
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
     // ── Config from env ───────────────────────────────────────────────────────
-    let influx_config = influx::InfluxConfig::from_env()
-        .unwrap_or_else(|e| panic!("cannot configure InfluxDB ingest: {e}"));
+    let rfms_config = rfms::RfmsConfig::from_env();
 
-    let vehicles_file = env::var("VEHICLES_FILE")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("vehicles.json"));
-
-    let bind_addr = env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:3000".into());
-
-    let hawkbit_url = env::var("HAWKBIT_URL").unwrap_or_else(|_| "http://hawkbit:8080".into());
-    let hawkbit_user = env::var("HAWKBIT_USER").unwrap_or_else(|_| "admin".into());
-    let hawkbit_password = env::var("HAWKBIT_PASSWORD").unwrap_or_else(|_| "admin".into());
+    let cli = Cli::parse();
+    let vehicles_file = cli.vehicles_file.clone();
+    let bind_addr = cli.bind_addr.clone();
 
     // ── Pre-populate store from vehicles.json ─────────────────────────────────
     let store = Store::new();
@@ -160,9 +198,9 @@ async fn main() {
 
     // ── HawkBit client + startup reconciliation ──────────────────────────────
     let hawkbit = Arc::new(HawkbitClient::new(
-        hawkbit_url,
-        hawkbit_user,
-        hawkbit_password,
+        cli.hawkbit_url.clone(),
+        cli.hawkbit_user.clone(),
+        cli.hawkbit_password.clone(),
     ));
     // Targets are no longer pre-registered from here. Each ota-agent self-
     // registers on first DDI contact, using the gateway token provisioned here.
@@ -171,10 +209,8 @@ async fn main() {
     // The token is a deployment-wide secret shared with the agents through
     // HAWKBIT_GATEWAY_TOKEN rather than broadcast at runtime, so both sides can
     // start in any order and the demo needs no MQTT broker.
-    let gateway_token = env::var("HAWKBIT_GATEWAY_TOKEN")
-        .expect("HAWKBIT_GATEWAY_TOKEN must be set; the ota-agents authenticate with it");
     hawkbit
-        .enable_gateway_token(&gateway_token)
+        .enable_gateway_token(&cli.hawkbit_gateway_token)
         .await
         .expect("failed to provision HawkBit gateway token");
     info!("hawkbit: gateway token ready");
@@ -196,10 +232,12 @@ async fn main() {
     };
 
     // ── Telemetry ingest (background task) ───────────────────────────────────
-    // Positions come from InfluxDB, which the blueprint's FMS Consumer fills
-    // from the uProtocol vehicle status topic. OTA state flows HawkBit → backend
-    // via `poll_campaign_state` below.
-    tokio::spawn(influx::run(influx_config, store, tx));
+    // Positions come from the blueprint rFMS API, which FMS Server serves from
+    // the InfluxDB that the FMS Consumer fills from the uProtocol vehicle status
+    // topic. Consuming rFMS rather than the database keeps the dashboard
+    // portable across backends and needs no database credentials. OTA state
+    // flows HawkBit → backend via `poll_campaign_state` below.
+    tokio::spawn(rfms::run(rfms_config, store, tx));
 
     // ── OTA notifications over uProtocol ─────────────────────────────────────
     // The transport must outlive this scope: dropping it deregisters the
@@ -209,6 +247,7 @@ async fn main() {
         ota_listener::OtaListenerConfig::from_env(),
         campaigns.clone(),
         campaign_tx.clone(),
+        hawkbit.clone(),
     )
     .await
     {
@@ -223,7 +262,7 @@ async fn main() {
     // Repairs anything a dropped uProtocol notification would leave stale, and
     // rehydrates state after a restart. Can be switched off to verify that the
     // notification path alone drives a campaign to completion.
-    if env::var("HAWKBIT_RECONCILE_ENABLED").as_deref() != Ok("false") {
+    if cli.hawkbit_reconcile_enabled {
         tokio::spawn(poll_campaign_state(hawkbit.clone(), campaigns, campaign_tx));
     } else {
         warn!("HawkBit reconciliation disabled; campaign state comes only from uProtocol");
@@ -291,6 +330,7 @@ async fn hydrate_campaigns(hawkbit: &HawkbitClient, store: &CampaignStore) {
             vehicles,
             created,
             rollout_id: Some(r.id),
+            actions: std::collections::HashMap::new(),
         });
         rehydrated += 1;
     }
