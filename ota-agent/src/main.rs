@@ -17,90 +17,121 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{env, sync::Arc, time::Duration};
+use std::{sync::Arc, time::Duration};
 
+use clap::Parser;
+use log::{info, warn};
 use rand::Rng;
 use reqwest::Client as HttpClient;
 use serde::Deserialize;
 use tokio::{sync::Mutex, time};
-use tonic::transport::Channel;
-use tracing::{info, warn};
 
-pub mod kuksa {
-    pub mod val {
-        pub mod v1 {
-            tonic::include_proto!("kuksa.val.v1");
-        }
-    }
-}
-
-use kuksa::val::v1::{val_client::ValClient, DataEntry, Datapoint, EntryUpdate, Field, SetRequest};
-
+mod databroker;
 mod uprotocol;
 use uprotocol::{status, OtaReporter, UpdateState};
 
 // ── Config ───────────────────────────────────────────────────────────────────
 
+/// In-vehicle OTA agent.
+///
+/// Polls the hawkBit DDI API over HTTP and reports every state transition to the
+/// backend orchestrator as a uProtocol Notification.
+#[derive(Debug, Parser)]
+#[command(name = "ota-agent", about, version)]
 struct Config {
+    /// Vehicle identifier. Read from the Databroker when not given, so that
+    /// every agent can share one configuration block.
+    #[arg(long, env = "VEHICLE_VIN")]
+    vin: Option<String>,
+
+    #[arg(long, env = "HAWKBIT_GATEWAY_TOKEN")]
+    gateway_token: String,
+
+    #[arg(
+        long,
+        env = "HAWKBIT_URL",
+        default_value = "http://hawkbit:8080",
+        value_parser = trim_trailing_slash
+    )]
+    hawkbit_url: String,
+
+    /// This agent's own uProtocol address. One authority per vehicle, so the
+    /// back end can tell the agents apart. `{vin}` is replaced at startup.
+    #[arg(long, env = "UP_SOURCE_URI", default_value = "up://{vin}/D102/1/0")]
+    up_source_uri: String,
+
+    /// The back end orchestrator that OTA notifications are addressed to.
+    #[arg(
+        long,
+        env = "UP_DESTINATION_URI",
+        default_value = "up://fms-ota-orchestrator/D103/1/0"
+    )]
+    up_destination_uri: String,
+
+    #[arg(long, env = "ZENOH_CONFIG_PATH", default_value = "/zenoh-config.json5")]
+    zenoh_config_path: String,
+
+    #[arg(long, env = "KUKSA_HOST", default_value = "databroker")]
+    kuksa_host: String,
+
+    #[arg(long, env = "KUKSA_PORT", default_value_t = 55556)]
+    kuksa_port: u16,
+
+    /// Probability that a simulated install fails, in [0.0, 1.0].
+    ///
+    /// Defaults to 0 so that a default run is deterministic and the end-to-end
+    /// test is not flaky. Set 0.2 for a demo that shows the failure path.
+    #[arg(long, env = "FAILURE_RATE", default_value_t = 0.0)]
+    failure_rate: f64,
+
+    #[arg(long, env = "DOWNLOAD_DELAY_SECS", default_value_t = 5)]
+    download_delay_secs: u64,
+
+    #[arg(long, env = "INSTALL_DELAY_SECS", default_value_t = 3)]
+    install_delay_secs: u64,
+
+    #[arg(long, env = "DDI_POLL_SECS", default_value_t = 3)]
+    poll_interval_secs: u64,
+}
+
+fn trim_trailing_slash(value: &str) -> Result<String, std::convert::Infallible> {
+    Ok(value.trim_end_matches('/').to_string())
+}
+
+/// Runtime configuration, with the VIN resolved and substituted into the
+/// source URI. Built from [`Config`] once the Databroker has answered.
+struct Agent {
     vin: String,
     gateway_token: String,
-    /// This agent's own uProtocol address. One authority per vehicle, so the
-    /// back end can tell the agents apart.
+    hawkbit_url: String,
     up_source_uri: String,
-    /// The back end orchestrator that OTA notifications are addressed to.
     up_destination_uri: String,
     zenoh_config_path: String,
     kuksa_host: String,
     kuksa_port: u16,
-    hawkbit_url: String,
     failure_rate: f64,
     download_delay_secs: u64,
     install_delay_secs: u64,
     poll_interval_secs: u64,
 }
 
-impl Config {
-    fn from_env() -> Self {
+impl Agent {
+    fn new(cfg: Config, vin: String) -> Self {
         Self {
-            vin: required("VEHICLE_VIN"),
-            gateway_token: required("HAWKBIT_GATEWAY_TOKEN"),
-            up_source_uri: env::var("UP_SOURCE_URI")
-                .unwrap_or_else(|_| format!("up://{}/D102/1/0", required("VEHICLE_VIN"))),
-            up_destination_uri: env::var("UP_DESTINATION_URI")
-                .unwrap_or_else(|_| "up://fms-ota-orchestrator/D103/1/0".into()),
-            zenoh_config_path: env::var("ZENOH_CONFIG_PATH")
-                .unwrap_or_else(|_| "/zenoh-config.json5".into()),
-            kuksa_host: required("KUKSA_HOST"),
-            kuksa_port: env::var("KUKSA_PORT")
-                .unwrap_or_else(|_| "55555".into())
-                .parse()
-                .expect("KUKSA_PORT must be a valid port number"),
-            hawkbit_url: env::var("HAWKBIT_URL")
-                .unwrap_or_else(|_| "http://hawkbit:8080".into())
-                .trim_end_matches('/')
-                .to_string(),
-            failure_rate: env::var("FAILURE_RATE")
-                .unwrap_or_else(|_| "0.2".into())
-                .parse()
-                .expect("FAILURE_RATE must be a float in [0.0, 1.0]"),
-            download_delay_secs: env::var("DOWNLOAD_DELAY_SECS")
-                .unwrap_or_else(|_| "5".into())
-                .parse()
-                .expect("DOWNLOAD_DELAY_SECS must be a positive integer"),
-            install_delay_secs: env::var("INSTALL_DELAY_SECS")
-                .unwrap_or_else(|_| "3".into())
-                .parse()
-                .expect("INSTALL_DELAY_SECS must be a positive integer"),
-            poll_interval_secs: env::var("DDI_POLL_SECS")
-                .unwrap_or_else(|_| "3".into())
-                .parse()
-                .expect("DDI_POLL_SECS must be a positive integer"),
+            up_source_uri: cfg.up_source_uri.replace("{vin}", &vin),
+            vin,
+            gateway_token: cfg.gateway_token,
+            hawkbit_url: cfg.hawkbit_url,
+            up_destination_uri: cfg.up_destination_uri,
+            zenoh_config_path: cfg.zenoh_config_path,
+            kuksa_host: cfg.kuksa_host,
+            kuksa_port: cfg.kuksa_port,
+            failure_rate: cfg.failure_rate.clamp(0.0, 1.0),
+            download_delay_secs: cfg.download_delay_secs,
+            install_delay_secs: cfg.install_delay_secs,
+            poll_interval_secs: cfg.poll_interval_secs,
         }
     }
-}
-
-fn required(key: &str) -> String {
-    env::var(key).unwrap_or_else(|_| panic!("{} must be set", key))
 }
 
 // ── DDI DTOs ─────────────────────────────────────────────────────────────────
@@ -139,58 +170,6 @@ struct DeploymentPayload {
 #[derive(Debug, Deserialize)]
 struct DeploymentChunk {
     version: String,
-}
-
-// ── gRPC helpers ─────────────────────────────────────────────────────────────
-
-async fn connect_databroker(host: &str, port: u16) -> ValClient<Channel> {
-    let endpoint = format!("http://{}:{}", host, port);
-    loop {
-        match ValClient::connect(endpoint.clone()).await {
-            Ok(client) => {
-                info!("connected to databroker at {}", endpoint);
-                return client;
-            }
-            Err(e) => {
-                warn!("databroker not ready ({}), retrying in 2s…", e);
-                time::sleep(Duration::from_secs(2)).await;
-            }
-        }
-    }
-}
-
-async fn set_string(client: &mut ValClient<Channel>, path: &str, value: String) {
-    let req = SetRequest {
-        updates: vec![EntryUpdate {
-            entry: Some(DataEntry {
-                path: path.to_string(),
-                value: Some(Datapoint {
-                    value: Some(kuksa::val::v1::datapoint::Value::StringValue(value.clone())),
-                }),
-                actuator_target: None,
-                metadata: None,
-            }),
-            fields: vec![Field::Value as i32],
-        }],
-    };
-    // The Databroker reports per-datapoint problems (unknown path, wrong type)
-    // in the response body rather than as a gRPC error, so a bare Ok(..) is not
-    // enough to conclude the value landed.
-    match client.set(req).await {
-        Err(e) => warn!("failed to set {} = {}: {}", path, value, e),
-        Ok(resp) => {
-            let resp = resp.into_inner();
-            if let Some(error) = resp.error {
-                warn!("databroker rejected {} = {}: {:?}", path, value, error);
-            }
-            for entry_error in resp.errors {
-                warn!(
-                    "databroker rejected {} = {}: {:?}",
-                    entry_error.path, value, entry_error.error
-                );
-            }
-        }
-    }
 }
 
 // ── HawkBit DDI loop ─────────────────────────────────────────────────────────
@@ -341,16 +320,17 @@ fn last_path_segment(url: &str) -> Option<String> {
         .trim_end_matches('/')
         .rsplit('/')
         .next()
+        .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
 }
 
 async fn run_deployment(
-    cfg: Arc<Config>,
+    cfg: Arc<Agent>,
     ddi: Arc<Ddi>,
     reporter: Option<Arc<OtaReporter>>,
     action_id: u64,
 ) {
-    info!(vin = %cfg.vin, action_id, "deployment picked up");
+    info!("[{}] action {action_id}: deployment picked up", cfg.vin);
 
     // Notify alongside each DDI feedback rather than instead of it: DDI remains
     // the authoritative record HawkBit acts on, and the notification is what
@@ -384,7 +364,10 @@ async fn run_deployment(
         .feedback(action_id, "download", "none", "DOWNLOADING")
         .await
     {
-        warn!(vin = %cfg.vin, action_id, "download feedback failed: {e}");
+        warn!(
+            "[{}] action {action_id}: download feedback failed: {e}",
+            cfg.vin
+        );
     }
     notify(UpdateState::UPDATE_STATE_DOWNLOADING, version.clone(), None).await;
     time::sleep(Duration::from_secs(cfg.download_delay_secs)).await;
@@ -394,20 +377,29 @@ async fn run_deployment(
         .feedback(action_id, "downloaded", "none", "INSTALLING")
         .await
     {
-        warn!(vin = %cfg.vin, action_id, "install feedback failed: {e}");
+        warn!(
+            "[{}] action {action_id}: install feedback failed: {e}",
+            cfg.vin
+        );
     }
     notify(UpdateState::UPDATE_STATE_INSTALLING, version.clone(), None).await;
     time::sleep(Duration::from_secs(cfg.install_delay_secs)).await;
 
     // Terminal: success or (simulated) failure
-    let failed = rand::thread_rng().gen_bool(cfg.failure_rate.clamp(0.0, 1.0));
+    let failed = rand::thread_rng().gen_bool(cfg.failure_rate);
     if failed {
-        warn!(vin = %cfg.vin, action_id, "update failed (simulated)");
+        warn!(
+            "[{}] action {action_id}: update failed (simulated)",
+            cfg.vin
+        );
         if let Err(e) = ddi
             .feedback(action_id, "closed", "failure", "simulated failure")
             .await
         {
-            warn!(vin = %cfg.vin, action_id, "failure feedback failed: {e}");
+            warn!(
+                "[{}] action {action_id}: failure feedback failed: {e}",
+                cfg.vin
+            );
         }
         notify(
             UpdateState::UPDATE_STATE_FAILED,
@@ -416,9 +408,18 @@ async fn run_deployment(
         )
         .await;
     } else {
-        let mut kuksa = connect_databroker(&cfg.kuksa_host, cfg.kuksa_port).await;
-        set_string(&mut kuksa, "Vehicle.SoftwareVersion", version.clone()).await;
-        info!(vin = %cfg.vin, action_id, %version, "update complete");
+        match databroker::connect(&cfg.kuksa_host, cfg.kuksa_port) {
+            Ok(mut kuksa) => {
+                if let Err(e) = databroker::set_software_version(&mut kuksa, &version).await {
+                    warn!("[{}] {e}", cfg.vin);
+                }
+            }
+            Err(e) => warn!("[{}] {e}", cfg.vin),
+        }
+        info!(
+            "[{}] action {action_id}: update complete, version {version}",
+            cfg.vin
+        );
         if let Err(e) = ddi
             .feedback(
                 action_id,
@@ -428,13 +429,16 @@ async fn run_deployment(
             )
             .await
         {
-            warn!(vin = %cfg.vin, action_id, "success feedback failed: {e}");
+            warn!(
+                "[{}] action {action_id}: success feedback failed: {e}",
+                cfg.vin
+            );
         }
         notify(UpdateState::UPDATE_STATE_COMPLETE, version.clone(), None).await;
     }
 }
 
-async fn ddi_loop(cfg: Arc<Config>, ddi: Arc<Ddi>, reporter: Option<Arc<OtaReporter>>) {
+async fn ddi_loop(cfg: Arc<Agent>, ddi: Arc<Ddi>, reporter: Option<Arc<OtaReporter>>) {
     let mut ticker = time::interval(Duration::from_secs(cfg.poll_interval_secs));
     // Track the action ids we've already started processing so a slow
     // state-machine run doesn't get kicked off twice by the next poll.
@@ -458,14 +462,17 @@ async fn ddi_loop(cfg: Arc<Config>, ddi: Arc<Ddi>, reporter: Option<Arc<OtaRepor
                 }
             }
             Ok(Some(DdiWork::Cancel(action_id))) => {
-                info!(vin = %cfg.vin, action_id, "ack-ing cancel action");
+                info!("[{}] action {action_id}: acknowledging cancel", cfg.vin);
                 if let Err(e) = ddi.ack_cancel(action_id).await {
-                    warn!(vin = %cfg.vin, action_id, "cancel ack failed: {e}");
+                    warn!(
+                        "[{}] action {action_id}: cancel acknowledgement failed: {e}",
+                        cfg.vin
+                    );
                 }
             }
             Ok(None) => {}
             Err(e) => {
-                warn!(vin = %cfg.vin, "DDI poll failed: {e}");
+                warn!("[{}] DDI poll failed: {e}", cfg.vin);
             }
         }
     }
@@ -475,20 +482,35 @@ async fn ddi_loop(cfg: Arc<Config>, ddi: Arc<Ddi>, reporter: Option<Arc<OtaRepor
 
 #[tokio::main]
 async fn main() {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "ota_agent=info".into()),
-        )
-        .init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
 
-    let cfg = Arc::new(Config::from_env());
+    let cfg = Config::parse();
+
+    // The VIN identifies this vehicle everywhere: to hawkBit as the controller
+    // id, and in this agent's uProtocol authority. Prefer the Databroker, which
+    // is the vehicle's own source of truth, and fall back to the argument.
+    let vin = match cfg.vin.clone() {
+        Some(vin) => vin,
+        None => {
+            let mut client = match databroker::connect(&cfg.kuksa_host, cfg.kuksa_port) {
+                Ok(client) => client,
+                Err(e) => {
+                    log::error!("{e}");
+                    std::process::exit(1);
+                }
+            };
+            databroker::wait_for_vin(&mut client, Duration::from_secs(2)).await
+        }
+    };
+
+    let cfg = Arc::new(Agent::new(cfg, vin));
     info!("starting ota-agent for {}", cfg.vin);
 
     // The gateway token is deployment configuration rather than something handed
     // over at runtime, so the agent can start polling DDI immediately and does
     // not depend on the backend having come up first. HawkBit auto-registers the
     // target on the first authenticated request.
+    //
     // A transport failure must not stop the agent doing OTA work: DDI is the
     // authoritative path and the back end reconciles against HawkBit, so we
     // degrade to DDI-only reporting rather than refusing to start.
@@ -500,15 +522,112 @@ async fn main() {
     .await
     {
         Ok(reporter) => {
-            info!(vin = %cfg.vin, source = %cfg.up_source_uri, "uProtocol OTA reporting enabled");
+            info!(
+                "[{}] uProtocol OTA reporting enabled from {}",
+                cfg.vin, cfg.up_source_uri
+            );
             Some(Arc::new(reporter))
         }
         Err(e) => {
-            warn!(vin = %cfg.vin, "uProtocol OTA reporting disabled: {e}");
+            warn!("[{}] uProtocol OTA reporting disabled: {e}", cfg.vin);
             None
         }
     };
 
     let ddi = Arc::new(Ddi::new(&cfg.hawkbit_url, &cfg.vin, &cfg.gateway_token));
     ddi_loop(cfg, ddi, reporter).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn config() -> Config {
+        Config::parse_from(["ota-agent", "--gateway-token", "t"])
+    }
+
+    #[test]
+    fn failure_injection_is_off_by_default() {
+        // A non-deterministic default would make the end-to-end test flaky.
+        assert_eq!(config().failure_rate, 0.0);
+    }
+
+    #[test]
+    fn vin_is_optional_so_it_can_come_from_the_databroker() {
+        assert!(config().vin.is_none());
+    }
+
+    #[test]
+    fn source_uri_substitutes_the_vin() {
+        let agent = Agent::new(config(), "VIN-0001".to_string());
+        assert_eq!(agent.up_source_uri, "up://VIN-0001/D102/1/0");
+        assert_eq!(
+            agent.up_destination_uri,
+            "up://fms-ota-orchestrator/D103/1/0"
+        );
+    }
+
+    #[test]
+    fn an_explicit_source_uri_is_left_alone() {
+        let cfg = Config::parse_from([
+            "ota-agent",
+            "--gateway-token",
+            "t",
+            "--up-source-uri",
+            "up://custom/D102/1/0",
+        ]);
+        let agent = Agent::new(cfg, "VIN-0001".to_string());
+        assert_eq!(agent.up_source_uri, "up://custom/D102/1/0");
+    }
+
+    #[test]
+    fn failure_rate_is_clamped() {
+        let cfg = Config::parse_from(["ota-agent", "--gateway-token", "t", "--failure-rate", "5"]);
+        assert_eq!(Agent::new(cfg, "VIN-0001".into()).failure_rate, 1.0);
+    }
+
+    #[test]
+    fn hawkbit_url_loses_a_trailing_slash() {
+        let cfg = Config::parse_from([
+            "ota-agent",
+            "--gateway-token",
+            "t",
+            "--hawkbit-url",
+            "http://hawkbit:8080/",
+        ]);
+        assert_eq!(cfg.hawkbit_url, "http://hawkbit:8080");
+    }
+
+    #[test]
+    fn last_path_segment_strips_the_cache_buster() {
+        // hawkBit appends ?c=<n> to the deploymentBase link on every poll.
+        assert_eq!(
+            last_path_segment(
+                "http://hawkbit:8080/DEFAULT/controller/v1/VIN-0001/deploymentBase/7?c=1234"
+            ),
+            Some("7".to_string())
+        );
+    }
+
+    #[test]
+    fn last_path_segment_handles_a_bare_url() {
+        assert_eq!(
+            last_path_segment("http://hawkbit:8080/DEFAULT/controller/v1/VIN-0001/cancelAction/12"),
+            Some("12".to_string())
+        );
+    }
+
+    #[test]
+    fn last_path_segment_ignores_a_trailing_slash() {
+        assert_eq!(
+            last_path_segment("http://hawkbit:8080/deploymentBase/7/"),
+            Some("7".to_string())
+        );
+    }
+
+    #[test]
+    fn last_path_segment_rejects_an_empty_input() {
+        assert_eq!(last_path_segment(""), None);
+        assert_eq!(last_path_segment("/"), None);
+    }
 }

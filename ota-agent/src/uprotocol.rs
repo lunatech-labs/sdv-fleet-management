@@ -31,7 +31,7 @@
 
 use std::{str::FromStr, sync::Arc, time::SystemTime};
 
-use tracing::{debug, warn};
+use log::{debug, warn};
 use up_rust::{
     communication::{CallOptions, Notifier, SimpleNotifier, UPayload},
     LocalUriProvider, StaticUriProvider, UTransport, UUri,
@@ -102,7 +102,7 @@ impl OtaReporter {
         let payload = match UPayload::try_from_protobuf(status) {
             Ok(payload) => payload,
             Err(e) => {
-                warn!(%vin, "cannot encode OTA status: {e}");
+                warn!("[{vin}] cannot encode OTA status: {e}");
                 return;
             }
         };
@@ -117,8 +117,8 @@ impl OtaReporter {
             )
             .await
         {
-            Ok(()) => debug!(%vin, ?state, "OTA status notified"),
-            Err(e) => warn!(%vin, ?state, "OTA status notification failed: {e}"),
+            Ok(()) => debug!("[{vin}] OTA status notified: {state:?}"),
+            Err(e) => warn!("[{vin}] OTA status notification failed for {state:?}: {e}"),
         }
     }
 }
