@@ -19,13 +19,18 @@
 
 FROM rust:1.93-slim as builder
 
-RUN apt-get update && apt-get install -y protobuf-compiler && rm -rf /var/lib/apt/lists/*
+# build-essential is required because kuksa-rust-sdk build-depends on
+# protobuf-src, which compiles protobuf from source with autotools and needs a
+# C++ toolchain. The blueprint pays the same cost: its builder image
+# (rust-musl-cross) ships one already.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends build-essential protobuf-compiler \
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 # Built from the repository root so proto/ is shared with the backend.
 COPY ota-agent/Cargo.toml ota-agent/Cargo.lock* ./
 COPY ota-agent/build.rs ./
-COPY ota-agent/proto ./proto
 COPY ota-agent/src ./src
 COPY proto /proto
 

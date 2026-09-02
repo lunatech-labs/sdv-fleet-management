@@ -35,14 +35,12 @@ fn shared_proto_root() -> PathBuf {
 }
 
 fn main() {
-    // Kuksa uses prost/tonic because the agent talks gRPC to the Databroker.
-    tonic_build::configure()
-        .compile(&["proto/kuksa/val/v1/val.proto"], &["proto"])
-        .expect("failed to compile kuksa proto files");
-
-    // The OTA contract is compiled with rust-protobuf instead: up-rust's
-    // UPayload conversions require `protobuf::Message`, which prost does not
-    // implement. `pure()` avoids needing a protoc binary for this one.
+    // Only one codegen. The Kuksa client comes from `kuksa-rust-sdk`, so the
+    // agent no longer generates its own gRPC stubs.
+    //
+    // rust-protobuf rather than prost: up-rust's UPayload conversions require
+    // `protobuf::Message`, which prost does not implement. `pure()` avoids
+    // needing a protoc binary.
     let proto_root = shared_proto_root();
     protobuf_codegen::Codegen::new()
         .pure()
@@ -51,6 +49,5 @@ fn main() {
         .cargo_out_dir("ota_proto")
         .run_from_script();
 
-    println!("cargo:rerun-if-changed=proto");
     println!("cargo:rerun-if-changed={}", proto_root.display());
 }
