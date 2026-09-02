@@ -54,7 +54,7 @@ Open `http://localhost:8090`.
 
 ![Live fleet map](docs/screenshots/main.png)
 
-Positions flow from 20 Kuksa Databrokers through MQTT to the Rust backend, then over a WebSocket to the browser with no polling.
+Positions flow from three Kuksa Databrokers through the blueprint uProtocol pipeline into InfluxDB, out again through the rFMS API to the Rust backend, and over a WebSocket to the browser with no polling.
 
 ---
 
