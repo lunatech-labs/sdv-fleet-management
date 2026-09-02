@@ -13,6 +13,8 @@ For a guided presentation walkthrough with screenshots and a screen recording, s
 | [DEMO.md](DEMO.md) | Presenter walkthrough |
 | [docs/rfms-coverage.md](docs/rfms-coverage.md) | What the rFMS API returns today, and what the dashboard needs |
 | [docs/licence-check.md](docs/licence-check.md) | Eclipse Dash third-party license result |
+| [docs/ota-pr-outline.md](docs/ota-pr-outline.md) | The planned upstream contribution sequence |
+| [docs/ddi-over-uprotocol.md](docs/ddi-over-uprotocol.md) | Sketch of hawkBit DDI over uProtocol |
 | [docs/history/](docs/history/) | Superseded design documents, kept as a record |
 
 ---
