@@ -132,7 +132,7 @@ services:
 
   # ── Telemetry store ────────────────────────────────────────────────────────
   influxdb:
-    image: docker.io/library/influxdb:2.7
+    image: docker.io/library/influxdb:2.9
     container_name: influxDB
     command: influxd
     networks:
