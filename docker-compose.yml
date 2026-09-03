@@ -85,7 +85,7 @@ x-databroker-defaults: &databroker-defaults
   restart: unless-stopped
 
 x-csv-provider-defaults: &csv-provider-defaults
-  image: quay.io/eclipse-kuksa/csv-provider:0.4.5
+  image: quay.io/eclipse-kuksa/csv-provider:0.4.6
   networks:
     - fms-vehicle
   environment: &csv-provider-env
