@@ -116,7 +116,7 @@ services:
 
   # ── uProtocol transport ────────────────────────────────────────────────────
   fms-zenoh-router:
-    image: eclipse/zenoh:1.10.0
+    image: eclipse/zenoh:1.10.1
     container_name: fms-zenoh-router
     command: -c /zenoh-config.json5
     environment:
