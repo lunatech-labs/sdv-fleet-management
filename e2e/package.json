@@ -11,7 +11,7 @@
     "capture": "playwright test --config=capture/playwright.capture.config.ts"
   },
   "devDependencies": {
-    "@playwright/test": "^1.62.1",
+    "@playwright/test": "^1.63.0",
     "typescript": "^6.0.3"
   }
 }
