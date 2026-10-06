@@ -251,21 +251,21 @@ services:
     environment:
       <<: *forwarder-env
       KUKSA_DATABROKER_URI: http://databroker-01:55556
-      TOPIC: up://VIN-0001/D100/1/D100
+      TOPIC: up://vin-0001/D100/1/D100
 
   fms-forwarder-02:
     <<: *forwarder-defaults
     environment:
       <<: *forwarder-env
       KUKSA_DATABROKER_URI: http://databroker-02:55556
-      TOPIC: up://VIN-0002/D100/1/D100
+      TOPIC: up://vin-0002/D100/1/D100
 
   fms-forwarder-03:
     <<: *forwarder-defaults
     environment:
       <<: *forwarder-env
       KUKSA_DATABROKER_URI: http://databroker-03:55556
-      TOPIC: up://VIN-0003/D100/1/D100
+      TOPIC: up://vin-0003/D100/1/D100
 
   ota-agent-01:
     <<: *ota-agent-defaults

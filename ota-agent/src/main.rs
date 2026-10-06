@@ -56,7 +56,8 @@ struct Config {
     hawkbit_url: String,
 
     /// This agent's own uProtocol address. One authority per vehicle, so the
-    /// back end can tell the agents apart. `{vin}` is replaced at startup.
+    /// back end can tell the agents apart. `{vin}` is replaced at startup with
+    /// the lowercased VIN, because up-rust 0.9 rejects uppercase authorities.
     #[arg(long, env = "UP_SOURCE_URI", default_value = "up://{vin}/D102/1/0")]
     up_source_uri: String,
 
@@ -118,7 +119,7 @@ struct Agent {
 impl Agent {
     fn new(cfg: Config, vin: String) -> Self {
         Self {
-            up_source_uri: cfg.up_source_uri.replace("{vin}", &vin),
+            up_source_uri: cfg.up_source_uri.replace("{vin}", &vin.to_lowercase()),
             vin,
             gateway_token: cfg.gateway_token,
             hawkbit_url: cfg.hawkbit_url,
@@ -560,7 +561,7 @@ mod tests {
     #[test]
     fn source_uri_substitutes_the_vin() {
         let agent = Agent::new(config(), "VIN-0001".to_string());
-        assert_eq!(agent.up_source_uri, "up://VIN-0001/D102/1/0");
+        assert_eq!(agent.up_source_uri, "up://vin-0001/D102/1/0");
         assert_eq!(
             agent.up_destination_uri,
             "up://fms-ota-orchestrator/D103/1/0"
