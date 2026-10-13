@@ -29,9 +29,7 @@ use std::{str::FromStr, sync::Arc};
 
 use log::{debug, info, warn};
 use tokio::sync::broadcast;
-use up_rust::{
-    LocalUriProvider, StaticUriProvider, UListener, UMessage, UTransport, UUri, UUriError,
-};
+use up_rust::{UListener, UMessage, UTransport, UUri, UUriError};
 use up_transport_zenoh::UPTransportZenoh;
 
 use crate::campaign::{CampaignEvent, CampaignId, CampaignStore, VehicleUpdateState};
@@ -203,17 +201,14 @@ pub async fn start(
     hawkbit: Arc<HawkbitClient>,
 ) -> Result<Arc<dyn UTransport>, String> {
     let uri = UUri::from_str(&config.uri).map_err(|e: UUriError| format!("bad UP_URI: {e}"))?;
-    let uri_provider = Arc::new(
-        StaticUriProvider::try_from(&uri).map_err(|e| format!("cannot build URI provider: {e}"))?,
-    );
 
-    let zenoh_config = zenoh::Config::from_file(&config.zenoh_config_path)
-        .map_err(|e| format!("cannot read zenoh config {}: {e}", config.zenoh_config_path))?;
-    let transport: Arc<dyn UTransport> =
-        UPTransportZenoh::new(zenoh_config, uri_provider.get_source_uri())
-            .await
-            .map(Arc::new)
-            .map_err(|e| format!("cannot open zenoh transport: {e}"))?;
+    let transport: Arc<dyn UTransport> = UPTransportZenoh::builder(uri.authority_name())
+        .map_err(|e| format!("cannot build zenoh transport: {e}"))?
+        .with_config_path(config.zenoh_config_path.clone())
+        .build()
+        .await
+        .map(Arc::new)
+        .map_err(|e| format!("cannot open zenoh transport: {e}"))?;
 
     let listener = Arc::new(OtaStatusListener {
         campaigns,
