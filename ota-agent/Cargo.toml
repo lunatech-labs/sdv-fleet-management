@@ -35,12 +35,11 @@ env_logger  = "0.11"
 
 # The same Kuksa client the blueprint FMS Forwarder uses, rather than vendored
 # protos and a second gRPC stack.
-kuksa-rust-sdk = "0.2.1"
+kuksa-rust-sdk = "0.2.2"
 
 # uProtocol: OTA state transitions are reported to the back end as Notifications.
-up-rust             = { version = "0.4.0", default-features = false, features = ["communication"] }
-up-transport-zenoh  = "0.5.0"
-zenoh               = { version = "1.2.1", default-features = false }
+up-rust             = { version = "0.9.0", default-features = false, features = ["communication"] }
+up-transport-zenoh  = "0.9.1"
 protobuf            = "3.7.2"
 async-trait         = "0.1"
 

@@ -34,7 +34,7 @@ use std::{str::FromStr, sync::Arc, time::SystemTime};
 use log::{debug, warn};
 use up_rust::{
     communication::{CallOptions, Notifier, SimpleNotifier, UPayload},
-    LocalUriProvider, StaticUriProvider, UTransport, UUri,
+    StaticUriProvider, UTransport, UUri,
 };
 use up_transport_zenoh::UPTransportZenoh;
 
@@ -75,13 +75,13 @@ impl OtaReporter {
                 .map_err(|e| format!("cannot build URI provider: {e}"))?,
         );
 
-        let zenoh_config = zenoh::Config::from_file(zenoh_config_path)
-            .map_err(|e| format!("cannot read zenoh config {zenoh_config_path}: {e}"))?;
-        let transport: Arc<dyn UTransport> =
-            UPTransportZenoh::new(zenoh_config, uri_provider.get_source_uri())
-                .await
-                .map(Arc::new)
-                .map_err(|e| format!("cannot open zenoh transport: {e}"))?;
+        let transport: Arc<dyn UTransport> = UPTransportZenoh::builder(source.authority_name())
+            .map_err(|e| format!("cannot build zenoh transport: {e}"))?
+            .with_config_path(zenoh_config_path.to_string())
+            .build()
+            .await
+            .map(Arc::new)
+            .map_err(|e| format!("cannot open zenoh transport: {e}"))?;
 
         Ok(Self {
             notifier: SimpleNotifier::new(transport, uri_provider),
