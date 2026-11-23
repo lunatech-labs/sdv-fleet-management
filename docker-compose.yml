@@ -301,7 +301,7 @@ services:
       retries: 10
 
   hawkbit:
-    image: hawkbit/hawkbit-update-server:1.1.0
+    image: hawkbit/hawkbit-update-server:1.2.0
     networks:
       - fms-backend
     ports:
